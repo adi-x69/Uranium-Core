@@ -18,10 +18,12 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
@@ -66,6 +68,9 @@ import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTube
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.random.Random
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 // The reaction set, arranged roughly by mood: laughing -> crying -> neutral/sly ->
 // shocked/disgusted -> love/romantic -> misc/animals.
@@ -88,9 +93,20 @@ private data class ChatMessage(
 
 private data class FloatingReaction(val key: String, val emoji: String, val startX: Float)
 
+/** Someone currently present in the room, from rooms/{roomCode}/participants/{uid}. */
+private data class ParticipantInfo(val uid: String, val username: String, val avatarId: String)
+
+/** A transient "X joined" / "X left" banner shown over the video. */
+private data class BannerEntry(val key: String, val text: String)
+
 private fun watchDbRef(roomCode: String) = FirebaseDatabase
     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
     .reference.child("rooms").child(roomCode)
+
+private fun formatTimestamp(ms: Long): String {
+    if (ms <= 0L) return ""
+    return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms))
+}
 
 @Composable
 fun WatchScreen(
@@ -107,10 +123,64 @@ fun WatchScreen(
     val usersRef = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference.child("users") }
 
     var myUsername by remember { mutableStateOf("") }
+    var myAvatarId by remember { mutableStateOf("") }
     LaunchedEffect(uid) {
-        FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
-            .reference.child("users").child(uid).child("username").get()
+        val userRef = FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+            .reference.child("users").child(uid)
+        userRef.child("username").get()
             .addOnSuccessListener { myUsername = it.getValue(String::class.java) ?: "someone" }
+        userRef.child("avatarId").get()
+            .addOnSuccessListener { myAvatarId = it.getValue(String::class.java) ?: "avatar_1" }
+    }
+
+    // ---- Presence: mark this user as "in the room" so others see a join banner +
+    // pulsing avatar, and clean up (deliberate leave AND dropped connection) so
+    // everyone sees a leave banner and the glow disappears. ----
+    val participantRef = remember(roomCode, uid) { db.child("participants").child(uid) }
+    DisposableEffect(roomCode, uid) {
+        if (uid.isNotEmpty()) participantRef.onDisconnect().removeValue()
+        onDispose { participantRef.removeValue() }
+    }
+    LaunchedEffect(roomCode, uid, myUsername, myAvatarId) {
+        if (uid.isNotEmpty() && myUsername.isNotEmpty()) {
+            participantRef.setValue(mapOf("username" to myUsername, "avatarId" to myAvatarId.ifEmpty { "avatar_1" }))
+        }
+    }
+
+    var participants by remember { mutableStateOf<List<ParticipantInfo>>(emptyList()) }
+    val joinLeaveBanners = remember { mutableStateListOf<BannerEntry>() }
+
+    DisposableEffect(roomCode) {
+        val participantsRef = db.child("participants")
+        val listener = object : ChildEventListener {
+            override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
+                val pid = snapshot.key ?: return
+                val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "avatar_1"
+                participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
+                if (pid != uid) {
+                    joinLeaveBanners.add(BannerEntry("join-$pid-${System.nanoTime()}", "$username joined"))
+                }
+            }
+            override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {
+                val pid = snapshot.key ?: return
+                val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "avatar_1"
+                participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
+            }
+            override fun onChildRemoved(snapshot: DataSnapshot) {
+                val pid = snapshot.key ?: return
+                val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                participants = participants.filter { it.uid != pid }
+                if (pid != uid) {
+                    joinLeaveBanners.add(BannerEntry("leave-$pid-${System.nanoTime()}", "$username left"))
+                }
+            }
+            override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        participantsRef.addChildEventListener(listener)
+        onDispose { participantsRef.removeEventListener(listener) }
     }
 
     // ---- Video sync state (mirrors RoomScreen's model) ----
@@ -394,6 +464,35 @@ fun WatchScreen(
         bumpInteraction()
     }
 
+    // ---- Skip back/forward: shared by the overlay buttons AND double-tap-to-seek,
+    // so both paths stay in sync with each other and with Firebase. No-ops (silently)
+    // if this user doesn't have control - same gating as every other playback action. ----
+    fun skip(deltaMs: Long) {
+        if (!canControl) return
+        if (isYouTubeMode) {
+            val ceiling = if (ytDurationMs > 0) ytDurationMs else Long.MAX_VALUE
+            val newPos = (ytCurrentTimeMs + deltaMs).coerceIn(0L, ceiling)
+            youtubePlayer?.seekTo(newPos / 1000f)
+            ytCurrentTimeMs = newPos
+            pushPlaybackUpdate(isPlayingState, newPos)
+        } else {
+            val ceiling = exoPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+            val newPos = (exoPlayer.currentPosition + deltaMs).coerceIn(0L, ceiling)
+            exoPlayer.seekTo(newPos)
+            pushPlaybackUpdate(isPlayingState, newPos)
+        }
+        bumpInteraction()
+    }
+
+    // "left"/"right" + a nonce (so repeated taps on the same side still restart the fade)
+    var seekFlash by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    LaunchedEffect(seekFlash) {
+        if (seekFlash != null) {
+            delay(500)
+            seekFlash = null
+        }
+    }
+
     // ---- Video area (shared between fullscreen and chat-mode layouts) ----
     val videoAspect = 16f / 9f
 
@@ -401,8 +500,25 @@ fun WatchScreen(
         Box(
             modifier = modifier
                 .background(Color.Black)
-                .pointerInput(Unit) {
-                    detectTapGestures { bumpInteraction() }
+                .pointerInput(canControl) {
+                    detectTapGestures(
+                        onTap = { bumpInteraction() },
+                        onDoubleTap = { offset ->
+                            if (!canControl) return@detectTapGestures
+                            val third = size.width / 3
+                            when {
+                                offset.x < third -> {
+                                    skip(-10000L)
+                                    seekFlash = "left" to System.nanoTime()
+                                }
+                                offset.x > size.width - third -> {
+                                    skip(10000L)
+                                    seekFlash = "right" to System.nanoTime()
+                                }
+                                else -> bumpInteraction()
+                            }
+                        }
+                    )
                 }
         ) {
             if (isYouTubeMode) {
@@ -468,6 +584,38 @@ fun WatchScreen(
                 }
             }
 
+            // Double-tap-to-seek flash ("<<10" / "10>>") on whichever side was tapped
+            seekFlash?.let { (side, _) ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.35f)
+                        .align(if (side == "left") Alignment.CenterStart else Alignment.CenterEnd)
+                        .background(Color.Black.copy(alpha = 0.25f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (side == "left") "\u25c0\u25c0 10" else "10 \u25b6\u25b6",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+
+            // Join/leave banners, stacked at the top, auto-dismissing
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                joinLeaveBanners.forEach { entry ->
+                    key(entry.key) {
+                        JoinLeaveBanner(entry) { joinLeaveBanners.remove(entry) }
+                    }
+                }
+            }
+
             // Auto-hiding controls overlay (hidden entirely while in chat mode)
             AnimatedVisibility(
                 visible = controlsVisible && !isChatMode,
@@ -482,6 +630,8 @@ fun WatchScreen(
                     isPlaying = isPlayingState,
                     currentMs = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition,
                     durationMs = if (isYouTubeMode) ytDurationMs else exoPlayer.duration.coerceAtLeast(0L),
+                    participants = participants,
+                    myUid = uid,
                     onBack = onNavigateBack,
                     onTogglePlay = {
                         if (!canControl) return@PlayerControlsOverlay
@@ -496,19 +646,8 @@ fun WatchScreen(
                         }
                         bumpInteraction()
                     },
-                    onSkipBack = {
-                        if (!canControl) return@PlayerControlsOverlay
-                        if (isYouTubeMode) {
-                            val newPos = (ytCurrentTimeMs - 10000L).coerceAtLeast(0L)
-                            youtubePlayer?.seekTo(newPos / 1000f)
-                            pushPlaybackUpdate(isPlayingState, newPos)
-                        } else {
-                            val newPos = (exoPlayer.currentPosition - 10000L).coerceAtLeast(0L)
-                            exoPlayer.seekTo(newPos)
-                            pushPlaybackUpdate(isPlayingState, newPos)
-                        }
-                        bumpInteraction()
-                    },
+                    onSkipBack = { skip(-10000L) },
+                    onSkipForward = { skip(10000L) },
                     onSeek = { targetMs ->
                         if (!canControl) return@PlayerControlsOverlay
                         if (isYouTubeMode) {
@@ -556,7 +695,10 @@ fun WatchScreen(
                 onSend = { sendChat() },
                 onClose = { closeChat() },
                 typingUsers = othersTyping,
-                modifier = Modifier.fillMaxWidth().weight(1f)
+                // imePadding here ONLY - the video above keeps its exact fixed size and
+                // position always; just the message list + input compress/slide to clear
+                // the keyboard.
+                modifier = Modifier.fillMaxWidth().weight(1f).imePadding()
             )
         }
     } else {
@@ -592,6 +734,43 @@ private fun FloatingEmoji(reaction: FloatingReaction, onDone: () -> Unit) {
 }
 
 @Composable
+private fun JoinLeaveBanner(entry: BannerEntry, onDone: () -> Unit) {
+    val alpha = remember { Animatable(0f) }
+    LaunchedEffect(entry.key) {
+        alpha.animateTo(1f, animationSpec = tween(200))
+        delay(2000)
+        alpha.animateTo(0f, animationSpec = tween(400))
+        onDone()
+    }
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier
+            .padding(vertical = 3.dp)
+            .alpha(alpha.value)
+    ) {
+        Text(
+            text = entry.text,
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+        )
+    }
+}
+
+/** Small row of who's currently in the room, each avatar pulsing to show they're active. */
+@Composable
+private fun ParticipantAvatarsRow(participants: List<ParticipantInfo>, excludeUid: String) {
+    val others = participants.filter { it.uid != excludeUid }
+    if (others.isEmpty()) return
+    Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
+        others.take(5).forEach { p ->
+            AvatarCircle(avatar = avatarById(p.avatarId), size = 28.dp, pulsing = true)
+        }
+    }
+}
+
+@Composable
 private fun PlayerControlsOverlay(
     isHost: Boolean,
     canControl: Boolean,
@@ -599,9 +778,12 @@ private fun PlayerControlsOverlay(
     isPlaying: Boolean,
     currentMs: Long,
     durationMs: Long,
+    participants: List<ParticipantInfo>,
+    myUid: String,
     onBack: () -> Unit,
     onTogglePlay: () -> Unit,
     onSkipBack: () -> Unit,
+    onSkipForward: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleLandscape: () -> Unit,
     onOpenChat: () -> Unit,
@@ -628,6 +810,8 @@ private fun PlayerControlsOverlay(
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Spacer(modifier = Modifier.weight(1f))
+            ParticipantAvatarsRow(participants = participants, excludeUid = myUid)
+            Spacer(modifier = Modifier.width(8.dp))
             if (isHost) {
                 Text(
                     text = if (controlsUnlocked) "Unlocked" else "Locked",
@@ -657,6 +841,9 @@ private fun PlayerControlsOverlay(
                     tint = Color.White,
                     modifier = Modifier.size(48.dp)
                 )
+            }
+            IconButton(onClick = onSkipForward, modifier = Modifier.size(56.dp)) {
+                Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White, modifier = Modifier.size(36.dp))
             }
         }
 
@@ -760,12 +947,39 @@ private fun ChatPanel(
                     horizontalAlignment = if (isMine) Alignment.End else Alignment.Start,
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    if (!isMine) {
+                        Text(
+                            text = msg.senderUsername,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 2.dp)
+                        )
+                    }
+                    Surface(
+                        color = if (isMine) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = if (isMine) 16.dp else 4.dp,
+                            bottomEnd = if (isMine) 4.dp else 16.dp
+                        ),
+                        modifier = Modifier.widthIn(max = 260.dp)
+                    ) {
+                        Text(
+                            text = msg.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isMine) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
                     Text(
-                        text = msg.senderUsername,
+                        text = formatTimestamp(msg.timestamp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.Gray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp, top = 2.dp)
                     )
-                    Text(text = msg.text, style = MaterialTheme.typography.bodyMedium)
                 }
             }
             item { Spacer(modifier = Modifier.height(8.dp)) }
