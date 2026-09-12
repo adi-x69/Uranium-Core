@@ -978,7 +978,7 @@ private fun ChatPanel(
                         text = formatTimestamp(msg.timestamp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, top = 2.dp)
+                        modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp)
                     )
                 }
             }
