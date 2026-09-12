@@ -289,7 +289,7 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
             "Online now",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 24.dp, bottom = 8.dp)
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
         )
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
@@ -333,7 +333,7 @@ private fun ContinueWatchingRow(entries: List<ContinueWatchingEntry>, onResume: 
             "Continue Watching",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 24.dp, bottom = 8.dp)
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
         )
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
