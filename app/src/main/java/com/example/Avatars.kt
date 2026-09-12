@@ -1,5 +1,11 @@
 package com.example
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,34 +57,76 @@ val PRESET_AVATARS: List<Avatar> = listOf(
 fun avatarById(id: String?): Avatar =
     PRESET_AVATARS.firstOrNull { it.id == id } ?: PRESET_AVATARS[0]
 
+/**
+ * @param pulsing When true, draws an animated glow ring around the avatar to indicate
+ * the person is actively present (e.g. currently in the room/watch screen). Pulses
+ * opacity + scale on a loop using [MaterialTheme]'s primary (room-vibe) color, so it
+ * automatically matches whatever [com.example.ui.theme.RoomVibe] is in effect.
+ */
 @Composable
 fun AvatarCircle(
     avatar: Avatar,
     size: Dp = 56.dp,
     modifier: Modifier = Modifier,
-    selected: Boolean = false
+    selected: Boolean = false,
+    pulsing: Boolean = false
 ) {
-    Box(
-        modifier = modifier
-            .size(size)
-            .background(color = avatar.color, shape = CircleShape)
-            .then(
-                if (selected) {
-                    Modifier.border(
-                        width = 3.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = CircleShape
-                    )
-                } else {
-                    Modifier
-                }
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = avatar.emoji,
-            fontSize = (size.value / 2).sp
-        )
+    val glowColor = MaterialTheme.colorScheme.primary
+    val transition = rememberInfiniteTransition(label = "avatarPulse")
+    val pulseScale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 0.9f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    Box(contentAlignment = Alignment.Center) {
+        if (pulsing) {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .graphicsLayer {
+                        scaleX = pulseScale
+                        scaleY = pulseScale
+                        alpha = pulseAlpha
+                    }
+                    .border(width = 2.5.dp, color = glowColor, shape = CircleShape)
+            )
+        }
+        Box(
+            modifier = modifier
+                .size(size)
+                .background(color = avatar.color, shape = CircleShape)
+                .then(
+                    if (selected) {
+                        Modifier.border(
+                            width = 3.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = CircleShape
+                        )
+                    } else {
+                        Modifier
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = avatar.emoji,
+                fontSize = (size.value / 2).sp
+            )
+        }
     }
 }
 
