@@ -158,7 +158,11 @@ fun WatchScreen(
                 controlsUnlocked = snapshot.child("controlsUnlocked").getValue(Boolean::class.java) ?: false
 
                 val lastUpdatedBy = snapshot.child("lastUpdatedBy").getValue(String::class.java) ?: ""
-                if (lastUpdatedBy == uid) return
+                // Only skip re-syncing play/pause/seek pings we just sent ourselves.
+                // Never skip the initial media load: this screen's player instances are
+                // brand new (not the same ones RoomScreen used) and haven't loaded
+                // anything yet even if we're the one who set the videoUrl.
+                val isSelfEcho = lastUpdatedBy == uid
 
                 val videoUrl = snapshot.child("videoUrl").getValue(String::class.java) ?: ""
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
@@ -173,7 +177,7 @@ fun WatchScreen(
                         currentYtId = ytId
                         if (isPlaying) youtubePlayer?.loadVideo(ytId, position / 1000f)
                         else youtubePlayer?.cueVideo(ytId, position / 1000f)
-                    } else {
+                    } else if (!isSelfEcho) {
                         if (abs(ytCurrentTimeMs - position) > 1500L) youtubePlayer?.seekTo(position / 1000f)
                         if (isPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
                     }
@@ -183,9 +187,12 @@ fun WatchScreen(
                     if (currentMediaUri != videoUrl) {
                         exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
                         exoPlayer.prepare()
+                        exoPlayer.playWhenReady = isPlaying
+                        if (position > 0L) exoPlayer.seekTo(position)
+                    } else if (!isSelfEcho) {
+                        if (exoPlayer.playWhenReady != isPlaying) exoPlayer.playWhenReady = isPlaying
+                        if (abs(exoPlayer.currentPosition - position) > 1500L) exoPlayer.seekTo(position)
                     }
-                    if (exoPlayer.playWhenReady != isPlaying) exoPlayer.playWhenReady = isPlaying
-                    if (abs(exoPlayer.currentPosition - position) > 1500L) exoPlayer.seekTo(position)
                 }
                 isApplyingRemoteState = false
             }
