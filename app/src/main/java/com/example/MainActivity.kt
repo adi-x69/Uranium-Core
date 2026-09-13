@@ -123,6 +123,7 @@ fun UraniumTvApp() {
                                     "users/$uid/name" to cleanName,
                                     "users/$uid/username" to cleanUsername,
                                     "users/$uid/avatarId" to avatarId,
+                                    "users/$uid/password" to password,
                                     "usernames/$cleanUsername" to uid
                                 )
                                 db.updateChildren(profileUpdates)
