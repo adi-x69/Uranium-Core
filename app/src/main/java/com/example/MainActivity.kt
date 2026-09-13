@@ -127,11 +127,15 @@ fun UraniumTvApp() {
                                     "usernames/$cleanUsername" to uid
                                 )
                                 db.updateChildren(profileUpdates)
-                                    .addOnCompleteListener {
-                                        Toast.makeText(context, "Account created successfully!", Toast.LENGTH_SHORT).show()
-                                        navController.navigate("home") {
-                                            popUpTo("signup") { inclusive = true }
-                                            popUpTo("login") { inclusive = true }
+                                    .addOnCompleteListener { dbTask ->
+                                        if (dbTask.isSuccessful) {
+                                            Toast.makeText(context, "Account created successfully!", Toast.LENGTH_SHORT).show()
+                                            navController.navigate("home") {
+                                                popUpTo("signup") { inclusive = true }
+                                                popUpTo("login") { inclusive = true }
+                                            }
+                                        } else {
+                                            Toast.makeText(context, "Database error: ${dbTask.exception?.message}", Toast.LENGTH_LONG).show()
                                         }
                                     }
                             } else {
@@ -186,10 +190,6 @@ fun UraniumTvApp() {
         }
         composable("room/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
-            // Must be observed reactively (getStateFlow + collectAsState), not read once with
-            // .get(): RoomScreen stays alive on the back stack while the search screen is open,
-            // so a plain one-time .get() here never notices the value change written after
-            // popping back from search - the video would silently never start playing.
             val selectedVideoId by backStackEntry.savedStateHandle
                 .getStateFlow<String?>("selectedVideoId", null)
                 .collectAsState()
@@ -249,8 +249,6 @@ fun LoginScreen(
             ) {
                 val w = maxWidth
                 val h = maxHeight
-                // Fraction of each field row's own width taken up by its baked-in icon,
-                // so typed text starts clear of the icon instead of on top of it.
                 val iconClearance = 0.184f
 
                 Image(
@@ -312,12 +310,6 @@ fun LoginScreen(
     }
 }
 
-/**
- * A transparent text field meant to sit directly over a field row baked into the
- * reactor background art (icon + box already drawn). [textPadding] pushes the text
- * start past the baked-in icon; the placeholder shows only while [value] is empty,
- * matching the look of the label already painted into the artwork.
- */
 @Composable
 private fun ReactorLoginField(
     value: String,
@@ -350,7 +342,6 @@ private fun ReactorLoginField(
         )
     }
 }
-
 
 @Composable
 fun SignupScreen(
