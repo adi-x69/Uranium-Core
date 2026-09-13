@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,7 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -235,74 +239,117 @@ fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(32.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .verticalScroll(rememberScrollState())
         ) {
-            // Logo fallback
-            Text(
-                text = "Uranium TV",
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 48.dp)
-            )
-
-            // Username Field
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Username") },
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                singleLine = true
-            )
-
-            // Password Field
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 32.dp),
-                singleLine = true
-            )
-
-            // Login Button
-            Button(
-                onClick = { onLogin(username, password) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
+                    .aspectRatio(834f / 1885f)
             ) {
-                Text("Log In")
-            }
+                val w = maxWidth
+                val h = maxHeight
+                // Fraction of each field row's own width taken up by its baked-in icon,
+                // so typed text starts clear of the icon instead of on top of it.
+                val iconClearance = 0.184f
 
-            Spacer(modifier = Modifier.height(24.dp))
+                Image(
+                    painter = painterResource(R.drawable.login_reactor_bg),
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize()
+                )
 
-            // Create Account Link
-            TextButton(onClick = onNavigateToSignup) {
-                Text("Create an account")
-            }
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // Instagram Link fallback
-            TextButton(
-                onClick = {
-                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://instagram.com/uraniumm_235"))
-                    context.startActivity(intent)
-                }
-            ) {
-                Text("Follow on Instagram")
+                ReactorLoginField(
+                    value = username,
+                    onValueChange = { username = it },
+                    placeholder = "Username",
+                    modifier = Modifier
+                        .offset(x = w * 0.2038f, y = h * 0.4987f)
+                        .size(w * 0.5876f, h * 0.0530f),
+                    textPadding = w * 0.5876f * iconClearance
+                )
+
+                ReactorLoginField(
+                    value = password,
+                    onValueChange = { password = it },
+                    placeholder = "Password",
+                    isPassword = true,
+                    modifier = Modifier
+                        .offset(x = w * 0.2038f, y = h * 0.5623f)
+                        .size(w * 0.5876f, h * 0.0530f),
+                    textPadding = w * 0.5876f * iconClearance
+                )
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = w * 0.2278f, y = h * 0.6446f)
+                        .size(w * 0.5396f, h * 0.0637f)
+                        .clickable(onClick = { onLogin(username, password) })
+                )
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = w * 0.2698f, y = h * 0.7401f)
+                        .size(w * 0.4556f, h * 0.0451f)
+                        .clickable(onClick = onNavigateToSignup)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = w * 0.4196f, y = h * 0.7958f)
+                        .size(w * 0.1619f, h * 0.0637f)
+                        .clickable(onClick = {
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://instagram.com/uraniumm_235")
+                            )
+                            context.startActivity(intent)
+                        })
+                )
             }
         }
     }
 }
+
+/**
+ * A transparent text field meant to sit directly over a field row baked into the
+ * reactor background art (icon + box already drawn). [textPadding] pushes the text
+ * start past the baked-in icon; the placeholder shows only while [value] is empty,
+ * matching the look of the label already painted into the artwork.
+ */
+@Composable
+private fun ReactorLoginField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    isPassword: Boolean = false,
+    textPadding: androidx.compose.ui.unit.Dp = 0.dp,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.CenterStart) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+            keyboardOptions = if (isPassword) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+            textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFE7E9F0), fontSize = 16.sp),
+            cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = textPadding),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(placeholder, color = Color(0xFF8A8F9E), fontSize = 16.sp)
+                    }
+                    innerTextField()
+                }
+            }
+        )
+    }
+}
+
 
 @Composable
 fun SignupScreen(
