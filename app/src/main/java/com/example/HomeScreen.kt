@@ -43,7 +43,7 @@ fun HomeScreen(
     onNavigateToRoom: (String) -> Unit,
     onNavigateToFriends: () -> Unit,
     onNavigateToWatch: (String) -> Unit,
-    onLogout: () -> Unit
+    onNavigateToProfile: () -> Unit
 ) {
     val context = LocalContext.current
     var joinRoomCode by remember { mutableStateOf("") }
@@ -52,10 +52,24 @@ fun HomeScreen(
     var invites by remember { mutableStateOf<List<WatchInvite>>(emptyList()) }
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingEntry>>(emptyList()) }
     var onlineFriends by remember { mutableStateOf<List<FriendProfile>>(emptyList()) }
+    var myAvatarId by remember { mutableStateOf(PRESET_AVATARS[0].id) }
 
     val db = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference }
     val auth = remember { FirebaseAuth.getInstance() }
     val uid = auth.currentUser?.uid ?: ""
+
+    // So the profile button in the top bar shows this user's own avatar.
+    DisposableEffect(uid) {
+        val avatarRef = db.child("users").child(uid).child("avatarId")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                myAvatarId = snapshot.getValue(String::class.java) ?: PRESET_AVATARS[0].id
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        avatarRef.addValueEventListener(listener)
+        onDispose { avatarRef.removeEventListener(listener) }
+    }
 
     // Listen for incoming "watch together" invites from friends
     DisposableEffect(uid) {
@@ -125,8 +139,8 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("Uranium TV", style = MaterialTheme.typography.headlineMedium) },
                 actions = {
-                    TextButton(onClick = onLogout) {
-                        Text("Log Out")
+                    IconButton(onClick = onNavigateToProfile, modifier = Modifier.padding(end = 8.dp)) {
+                        AvatarCircle(avatar = avatarById(myAvatarId), size = 36.dp)
                     }
                 }
             )
