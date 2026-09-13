@@ -1,14 +1,22 @@
 package com.example
 
 import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -235,131 +243,76 @@ fun RoomScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Room: $roomCode") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Scaffold { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Button(
-                    onClick = onNavigateToSearch,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                ) {
-                    Text("Search YouTube")
-                }
-                OutlinedButton(
-                    onClick = onInviteFriends,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                ) {
-                    Text("Invite Friends")
-                }
-                if (hasVideo) {
-                    Button(
-                        onClick = onNavigateToWatch,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                    ) {
-                        Text("Watch Fullscreen")
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = ytInputUrl,
-                        onValueChange = { ytInputUrl = it },
-                        label = { Text("Paste YouTube Link") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (ytInputUrl.isNotBlank()) {
-                                val ytId = getYoutubeVideoId(ytInputUrl)
-                                val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else ytInputUrl
-                                val updates = mapOf(
-                                    "videoUrl" to finalUrl,
-                                    "position" to 0L,
-                                    "isPlaying" to true,
-                                    "lastUpdatedBy" to uid,
-                                    "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                )
-                                db.updateChildren(updates)
-                                recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
-                                
-                                // Local immediate update
-                                isApplyingRemoteState = true
-                                isYouTubeMode = true
-                                if (ytId != null) {
-                                    currentYtId = ytId
-                                    youtubePlayer?.loadVideo(ytId, 0f)
-                                }
-                                isApplyingRemoteState = false
-                                hasVideo = true
-                                onNavigateToWatch()
-                            }
+            ReactorRoomHero(
+                roomCode = roomCode,
+                ytInputUrl = ytInputUrl,
+                onYtInputChange = { ytInputUrl = it },
+                webInputUrl = webInputUrl,
+                onWebInputChange = { webInputUrl = it },
+                onNavigateBack = onNavigateBack,
+                onNavigateToSearch = onNavigateToSearch,
+                onInviteFriends = onInviteFriends,
+                onPlayYt = {
+                    if (ytInputUrl.isNotBlank()) {
+                        val ytId = getYoutubeVideoId(ytInputUrl)
+                        val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else ytInputUrl
+                        val updates = mapOf(
+                            "videoUrl" to finalUrl,
+                            "position" to 0L,
+                            "isPlaying" to true,
+                            "lastUpdatedBy" to uid,
+                            "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                        )
+                        db.updateChildren(updates)
+                        recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
+
+                        isApplyingRemoteState = true
+                        isYouTubeMode = true
+                        if (ytId != null) {
+                            currentYtId = ytId
+                            youtubePlayer?.loadVideo(ytId, 0f)
                         }
-                    ) {
-                        Text("Play YT")
+                        isApplyingRemoteState = false
+                        hasVideo = true
+                        onNavigateToWatch()
+                    }
+                },
+                onPlayWeb = {
+                    if (webInputUrl.isNotBlank()) {
+                        val updates = mapOf(
+                            "videoUrl" to webInputUrl,
+                            "position" to 0L,
+                            "isPlaying" to true,
+                            "lastUpdatedBy" to uid,
+                            "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                        )
+                        db.updateChildren(updates)
+                        recordContinueWatching(usersRef, uid, roomCode, webInputUrl, 0L, isYouTube = false)
+
+                        isApplyingRemoteState = true
+                        isYouTubeMode = false
+                        exoPlayer.setMediaItem(MediaItem.fromUri(webInputUrl))
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                        isApplyingRemoteState = false
+                        hasVideo = true
+                        onNavigateToWatch()
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+            )
+
+            if (hasVideo) {
+                TextButton(
+                    onClick = onNavigateToWatch,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                 ) {
-                    OutlinedTextField(
-                        value = webInputUrl,
-                        onValueChange = { webInputUrl = it },
-                        label = { Text("Paste Web Video Link (.mp4)") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (webInputUrl.isNotBlank()) {
-                                val updates = mapOf(
-                                    "videoUrl" to webInputUrl,
-                                    "position" to 0L,
-                                    "isPlaying" to true,
-                                    "lastUpdatedBy" to uid,
-                                    "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                )
-                                db.updateChildren(updates)
-                                recordContinueWatching(usersRef, uid, roomCode, webInputUrl, 0L, isYouTube = false)
-                                
-                                // Local immediate update
-                                isApplyingRemoteState = true
-                                isYouTubeMode = false
-                                exoPlayer.setMediaItem(MediaItem.fromUri(webInputUrl))
-                                exoPlayer.prepare()
-                                exoPlayer.playWhenReady = true
-                                isApplyingRemoteState = false
-                                hasVideo = true
-                                onNavigateToWatch()
-                            }
-                        }
-                    ) {
-                        Text("Play Web")
-                    }
+                    Text("Watch Fullscreen")
                 }
             }
 
@@ -426,5 +379,118 @@ fun RoomScreen(
                 )
             }
         }
+    }
+}
+
+/**
+ * The reactor-skinned room screen: one flat mockup image used as the background
+ * (frame, glowing pills, decorative DNA/decay-chain art all baked in), with real
+ * interactive elements positioned on top by fraction of the hero's own width/height
+ * - same approach as the Home screen hero. The one difference: this mockup had the
+ * room code ("EGY4U6") baked directly into the art as example text, so that patch of
+ * background was painted over with matching stone texture and is replaced here by a
+ * real "Room: $roomCode" Text so it's correct for every room, not just the example.
+ */
+@Composable
+private fun ReactorRoomHero(
+    roomCode: String,
+    ytInputUrl: String,
+    onYtInputChange: (String) -> Unit,
+    webInputUrl: String,
+    onWebInputChange: (String) -> Unit,
+    onNavigateBack: () -> Unit,
+    onNavigateToSearch: () -> Unit,
+    onInviteFriends: () -> Unit,
+    onPlayYt: () -> Unit,
+    onPlayWeb: () -> Unit,
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(835f / 1883f)
+    ) {
+        val w = maxWidth
+        val h = maxHeight
+
+        Image(
+            painter = painterResource(R.drawable.room_reactor_bg),
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Back button
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.0120f, y = h * 0.0106f)
+                .size(w * 0.1138f, h * 0.0478f)
+                .clickable(onClick = onNavigateBack)
+        )
+
+        // Real room code, replacing the patched-out example text
+        Text(
+            text = "Room: $roomCode",
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
+            modifier = Modifier
+                .offset(x = w * 0.1258f, y = h * 0.0186f)
+                .size(w * 0.2814f, h * 0.0345f)
+                .wrapContentHeight(Alignment.CenterVertically)
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.0240f, y = h * 0.0664f)
+                .size(w * 0.9521f, h * 0.0611f)
+                .clickable(onClick = onNavigateToSearch)
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.0240f, y = h * 0.1328f)
+                .size(w * 0.9521f, h * 0.0451f)
+                .clickable(onClick = onInviteFriends)
+        )
+
+        BasicTextField(
+            value = ytInputUrl,
+            onValueChange = onYtInputChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Color(0xFFE7E9F0), fontSize = 15.sp),
+            cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+            modifier = Modifier
+                .offset(x = w * 0.0240f, y = h * 0.1992f)
+                .size(w * 0.6826f, h * 0.0611f)
+                .wrapContentHeight(Alignment.CenterVertically)
+                .padding(horizontal = 16.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.7126f, y = h * 0.2018f)
+                .size(w * 0.2635f, h * 0.0520f)
+                .clickable(onClick = onPlayYt)
+        )
+
+        BasicTextField(
+            value = webInputUrl,
+            onValueChange = onWebInputChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Color(0xFFE7E9F0), fontSize = 15.sp),
+            cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+            modifier = Modifier
+                .offset(x = w * 0.0240f, y = h * 0.2709f)
+                .size(w * 0.6826f, h * 0.0744f)
+                .wrapContentHeight(Alignment.CenterVertically)
+                .padding(horizontal = 16.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.7126f, y = h * 0.2762f)
+                .size(w * 0.2635f, h * 0.0558f)
+                .clickable(onClick = onPlayWeb)
+        )
     }
 }
