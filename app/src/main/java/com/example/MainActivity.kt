@@ -309,6 +309,7 @@ fun SignupScreen(
     onNavigateToLogin: () -> Unit,
     onSignup: (String, String, String, String) -> Unit
 ) {
+    val context = LocalContext.current
     var name by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -390,9 +391,11 @@ fun SignupScreen(
 
             Button(
                 onClick = {
-                    if (password == confirmPassword) {
-                        onSignup(name, username, password, selectedAvatarId)
+                    if (password != confirmPassword) {
+                        Toast.makeText(context, "Passwords don't match", Toast.LENGTH_SHORT).show()
+                        return@Button
                     }
+                    onSignup(name, username, password, selectedAvatarId)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
