@@ -96,15 +96,16 @@ fun UraniumTvApp() {
         composable("signup") {
             SignupScreen(
                 onNavigateToLogin = { navController.popBackStack() },
-                onSignup = { username, password, avatarId ->
-                    if (username.isBlank() || password.isBlank()) {
-                        Toast.makeText(context, "Please enter username and password", Toast.LENGTH_SHORT).show()
+                onSignup = { name, username, password, avatarId ->
+                    if (name.isBlank() || username.isBlank() || password.isBlank()) {
+                        Toast.makeText(context, "Please enter your name, username and password", Toast.LENGTH_SHORT).show()
                         return@SignupScreen
                     }
                     if (password.length < 6) {
                         Toast.makeText(context, "Password must be at least 6 characters", Toast.LENGTH_SHORT).show()
                         return@SignupScreen
                     }
+                    val cleanName = name.trim()
                     val cleanUsername = username.trim().lowercase()
                     val email = "$cleanUsername@uraniumtv.local"
                     auth.createUserWithEmailAndPassword(email, password)
@@ -115,6 +116,7 @@ fun UraniumTvApp() {
                                     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
                                     .reference
                                 val profileUpdates = mapOf(
+                                    "users/$uid/name" to cleanName,
                                     "users/$uid/username" to cleanUsername,
                                     "users/$uid/avatarId" to avatarId,
                                     "usernames/$cleanUsername" to uid
@@ -145,6 +147,14 @@ fun UraniumTvApp() {
                 onNavigateToWatch = { roomCode ->
                     navController.navigate("watch/$roomCode")
                 },
+                onNavigateToProfile = {
+                    navController.navigate("profile")
+                }
+            )
+        }
+        composable("profile") {
+            ProfileScreen(
+                onNavigateBack = { navController.popBackStack() },
                 onLogout = {
                     auth.signOut()
                     navController.navigate("login") {
@@ -297,8 +307,9 @@ fun LoginScreen(
 @Composable
 fun SignupScreen(
     onNavigateToLogin: () -> Unit,
-    onSignup: (String, String, String) -> Unit
+    onSignup: (String, String, String, String) -> Unit
 ) {
+    var name by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -331,6 +342,16 @@ fun SignupScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 24.dp)
+            )
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Full Name") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                singleLine = true
             )
 
             OutlinedTextField(
@@ -370,7 +391,7 @@ fun SignupScreen(
             Button(
                 onClick = {
                     if (password == confirmPassword) {
-                        onSignup(username, password, selectedAvatarId)
+                        onSignup(name, username, password, selectedAvatarId)
                     }
                 },
                 modifier = Modifier
