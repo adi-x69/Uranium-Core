@@ -86,6 +86,7 @@ fun RoomScreen(
     }
 
     var isApplyingRemoteState by remember { mutableStateOf(false) }
+    var hasAutoNavigatedRemote by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedVideoIdFromSearch) {
         if (selectedVideoIdFromSearch != null) {
@@ -128,6 +129,16 @@ fun RoomScreen(
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
                 val position = snapshot.child("position").getValue(Long::class.java) ?: 0L
                 if (videoUrl.isNotEmpty()) hasVideo = true
+
+                // The host's own device navigates to the fullscreen watch page the
+                // moment they hit Play (handled elsewhere in this file). The other
+                // person only ever sees this Firebase update, so without this they'd
+                // stay on the Room page while the video quietly played in the small
+                // embedded player at the bottom of the screen.
+                if (videoUrl.isNotEmpty() && isPlaying && !hasAutoNavigatedRemote) {
+                    hasAutoNavigatedRemote = true
+                    onNavigateToWatch()
+                }
 
                 isApplyingRemoteState = true
 
