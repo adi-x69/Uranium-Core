@@ -4,14 +4,17 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -21,8 +24,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ui.theme.UraniumMotion
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
@@ -134,24 +143,69 @@ fun HomeScreen(
         onDispose { db.child("users").child(uid).child("friends").removeEventListener(friendsListener) }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Uranium TV", style = MaterialTheme.typography.headlineMedium) },
-                actions = {
-                    IconButton(onClick = onNavigateToProfile, modifier = Modifier.padding(end = 8.dp)) {
-                        AvatarCircle(avatar = avatarById(myAvatarId), size = 36.dp)
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
+    Scaffold { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            ReactorHomeHero(
+                myAvatarId = myAvatarId,
+                joinRoomCode = joinRoomCode,
+                onJoinRoomCodeChange = { joinRoomCode = it },
+                isCreating = isCreating,
+                isJoining = isJoining,
+                onNavigateToProfile = onNavigateToProfile,
+                onCreateRoom = {
+                    isCreating = true
+                    val allowedChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                    val roomCode = (1..6).map { allowedChars.random() }.joinToString("")
+
+                    val roomData = mapOf(
+                        "videoUrl" to "",
+                        "isPlaying" to false,
+                        "position" to 0L,
+                        "lastUpdatedBy" to uid,
+                        "lastUpdatedAt" to ServerValue.TIMESTAMP,
+                        "hostUid" to uid,
+                        "controlsUnlocked" to false,
+                        "vibe" to com.example.ui.theme.RoomVibe.Default.name
+                    )
+
+                    db.child("rooms").child(roomCode).setValue(roomData)
+                        .addOnSuccessListener {
+                            isCreating = false
+                            onNavigateToRoom(roomCode)
+                        }
+                        .addOnFailureListener { exception ->
+                            isCreating = false
+                            Toast.makeText(context, "Failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                        }
+                },
+                onJoinRoom = {
+                    if (joinRoomCode.isBlank()) {
+                        Toast.makeText(context, "Enter a room code", Toast.LENGTH_SHORT).show()
+                        return@ReactorHomeHero
+                    }
+                    isJoining = true
+                    db.child("rooms").child(joinRoomCode).get()
+                        .addOnSuccessListener { snapshot ->
+                            isJoining = false
+                            if (snapshot.exists()) {
+                                onNavigateToRoom(joinRoomCode)
+                            } else {
+                                Toast.makeText(context, "Room not found", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .addOnFailureListener {
+                            isJoining = false
+                            Toast.makeText(context, "Error checking room", Toast.LENGTH_SHORT).show()
+                        }
+                },
+                onNavigateToFriends = onNavigateToFriends
+            )
+
             AnimatedVisibility(
                 visible = onlineFriends.isNotEmpty(),
                 enter = fadeIn(UraniumMotion.fade()),
@@ -203,96 +257,116 @@ fun HomeScreen(
                 }
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Button(
-                    onClick = {
-                        isCreating = true
-                        val allowedChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                        val roomCode = (1..6).map { allowedChars.random() }.joinToString("")
-
-                        val roomData = mapOf(
-                            "videoUrl" to "",
-                            "isPlaying" to false,
-                            "position" to 0L,
-                            "lastUpdatedBy" to uid,
-                            "lastUpdatedAt" to ServerValue.TIMESTAMP,
-                            "hostUid" to uid,
-                            "controlsUnlocked" to false,
-                            "vibe" to com.example.ui.theme.RoomVibe.Default.name
-                        )
-
-                        db.child("rooms").child(roomCode).setValue(roomData)
-                            .addOnSuccessListener {
-                                isCreating = false
-                                onNavigateToRoom(roomCode)
-                            }
-                            .addOnFailureListener { exception ->
-                                isCreating = false
-                                Toast.makeText(context, "Failed: ${exception.message}", Toast.LENGTH_LONG).show()
-                            }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = !isCreating && !isJoining
-                ) {
-                    Text(if (isCreating) "Creating..." else "Create Room")
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-                Text("OR", style = MaterialTheme.typography.bodyLarge)
-                Spacer(modifier = Modifier.height(32.dp))
-
-                OutlinedTextField(
-                    value = joinRoomCode,
-                    onValueChange = { joinRoomCode = it.uppercase() },
-                    label = { Text("Room Code") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Button(
-                    onClick = {
-                        if (joinRoomCode.isBlank()) {
-                            Toast.makeText(context, "Enter a room code", Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        isJoining = true
-                        db.child("rooms").child(joinRoomCode).get()
-                            .addOnSuccessListener { snapshot ->
-                                isJoining = false
-                                if (snapshot.exists()) {
-                                    onNavigateToRoom(joinRoomCode)
-                                } else {
-                                    Toast.makeText(context, "Room not found", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            .addOnFailureListener {
-                                isJoining = false
-                                Toast.makeText(context, "Error checking room", Toast.LENGTH_SHORT).show()
-                            }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = !isCreating && !isJoining
-                ) {
-                    Text(if (isJoining) "Joining..." else "Join Room")
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                OutlinedButton(
-                    onClick = onNavigateToFriends,
-                    modifier = Modifier.fillMaxWidth().height(50.dp)
-                ) {
-                    Text("Friends")
-                }
-            }
         }
+    }
+}
+
+/**
+ * The reactor-skinned hero: a single background image (frame, logo, dial, decorative
+ * readouts) with real interactive elements positioned on top of it by fraction of the
+ * hero's own width/height. Fractions were measured directly against the background
+ * artwork's pixel dimensions, so this holds its layout regardless of screen size -
+ * the hero box itself is locked to the artwork's aspect ratio via .aspectRatio(),
+ * meaning nothing stretches or distorts, it just scales up/down as one unit.
+ */
+@Composable
+private fun ReactorHomeHero(
+    myAvatarId: String,
+    joinRoomCode: String,
+    onJoinRoomCodeChange: (String) -> Unit,
+    isCreating: Boolean,
+    isJoining: Boolean,
+    onNavigateToProfile: () -> Unit,
+    onCreateRoom: () -> Unit,
+    onJoinRoom: () -> Unit,
+    onNavigateToFriends: () -> Unit,
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(835f / 1884f)
+    ) {
+        val w = maxWidth
+        val h = maxHeight
+        val busy = isCreating || isJoining
+
+        Image(
+            painter = painterResource(R.drawable.home_reactor_bg),
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Profile avatar, sitting where the radioactive icon panel is in the artwork.
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.706f, y = h * 0.066f)
+                .size(w * 0.150f, h * 0.066f)
+                .clickable(onClick = onNavigateToProfile),
+            contentAlignment = Alignment.Center
+        ) {
+            AvatarCircle(avatar = avatarById(myAvatarId), size = w * 0.11f)
+        }
+
+        Image(
+            painter = painterResource(R.drawable.btn_create_room),
+            contentDescription = "Create Room",
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .offset(x = w * 0.2168f, y = h * 0.4688f)
+                .size(w * 0.5677f, h * 0.0844f)
+                .clickable(enabled = !busy, onClick = onCreateRoom)
+        )
+
+        Box(
+            modifier = Modifier
+                .offset(x = w * 0.2383f, y = h * 0.6242f)
+                .size(w * 0.5210f, h * 0.0913f)
+        ) {
+            Image(
+                painter = painterResource(R.drawable.room_code_panel),
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier.fillMaxSize()
+            )
+            BasicTextField(
+                value = joinRoomCode,
+                onValueChange = onJoinRoomCodeChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = Color(0xFFFFC7C7),
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center,
+                    letterSpacing = 4.sp
+                ),
+                cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(0.88f)
+                    .fillMaxHeight(0.42f)
+                    .padding(bottom = h * 0.01f)
+            )
+        }
+
+        Image(
+            painter = painterResource(R.drawable.btn_join_room),
+            contentDescription = "Join Room",
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .offset(x = w * 0.2371f, y = h * 0.7208f)
+                .size(w * 0.5329f, h * 0.0785f)
+                .clickable(enabled = !busy, onClick = onJoinRoom)
+        )
+
+        Image(
+            painter = painterResource(R.drawable.btn_friends),
+            contentDescription = "Friends",
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .offset(x = w * 0.3401f, y = h * 0.8333f)
+                .size(w * 0.3198f, h * 0.0531f)
+                .clickable(onClick = onNavigateToFriends)
+        )
     }
 }
 
