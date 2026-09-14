@@ -346,7 +346,7 @@ private fun ReactorHomeHero(
         // Live Spinning Reactor Core
         AnimatedReactorCore(
             modifier = Modifier
-                .offset(x = w * 0.335f, y = h * 0.214f)
+                .offset(x = w * 0.335f, y = h * 0.204f)
                 .size(w * 0.33f, w * 0.33f)
         )
 
@@ -367,7 +367,7 @@ private fun ReactorHomeHero(
         // Profile avatar, sitting where the radioactive icon panel is in the artwork.
         Box(
             modifier = Modifier
-                .offset(x = w * 0.706f, y = h * 0.066f)
+                .offset(x = w * 0.728f, y = h * 0.072f)
                 .size(w * 0.150f, h * 0.066f)
                 .bouncyClick(onClick = onNavigateToProfile),
             contentAlignment = Alignment.Center
