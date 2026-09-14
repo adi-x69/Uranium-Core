@@ -23,6 +23,8 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 
+import com.example.ui.theme.bouncyClick
+
 /**
  * Account screen reachable from the profile icon in Home's top bar.
  * Shows the signed-in user's avatar (tap to change from the preset set),
@@ -88,7 +90,7 @@ fun ProfileScreen(
             AvatarCircle(
                 avatar = avatarById(avatarId),
                 size = 100.dp,
-                modifier = Modifier.clickableAvatar { isPickingAvatar = !isPickingAvatar }
+                modifier = Modifier.bouncyClick { isPickingAvatar = !isPickingAvatar }
             )
             TextButton(onClick = { isPickingAvatar = !isPickingAvatar }) {
                 Text(if (isPickingAvatar) "Cancel" else "Change profile picture")

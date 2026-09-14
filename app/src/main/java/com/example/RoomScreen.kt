@@ -1,5 +1,7 @@
 package com.example
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -64,29 +66,10 @@ fun RoomScreen(
     val uid = auth.currentUser?.uid ?: ""
     val usersRef = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference.child("users") }
     var hasVideo by remember { mutableStateOf(false) }
+    var hasAutoNavigatedRemote by remember { mutableStateOf(false) }
 
     var ytInputUrl by remember { mutableStateOf("") }
     var webInputUrl by remember { mutableStateOf("") }
-    
-    var isYouTubeMode by remember { mutableStateOf(false) }
-    var currentYtId by remember { mutableStateOf("") }
-    var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
-    var ytCurrentTimeMs by remember { mutableStateOf(0L) }
-
-    val exoPlayer = remember {
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(mapOf("Referer" to AppConfig.VIDEO_REFERER))
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .build().apply {
-                playWhenReady = false
-            }
-    }
-
-    var isApplyingRemoteState by remember { mutableStateOf(false) }
-    var hasAutoNavigatedRemote by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedVideoIdFromSearch) {
         if (selectedVideoIdFromSearch != null) {
@@ -101,12 +84,6 @@ fun RoomScreen(
             db.updateChildren(updates)
             recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
             
-            // Local immediate update
-            isApplyingRemoteState = true
-            isYouTubeMode = true
-            currentYtId = selectedVideoIdFromSearch
-            youtubePlayer?.loadVideo(selectedVideoIdFromSearch, 0f)
-            isApplyingRemoteState = false
             hasVideo = true
             
             onVideoIdConsumed()
@@ -127,62 +104,12 @@ fun RoomScreen(
 
                 val videoUrl = snapshot.child("videoUrl").getValue(String::class.java) ?: ""
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
-                val position = snapshot.child("position").getValue(Long::class.java) ?: 0L
                 if (videoUrl.isNotEmpty()) hasVideo = true
 
-                // The host's own device navigates to the fullscreen watch page the
-                // moment they hit Play (handled elsewhere in this file). The other
-                // person only ever sees this Firebase update, so without this they'd
-                // stay on the Room page while the video quietly played in the small
-                // embedded player at the bottom of the screen.
                 if (videoUrl.isNotEmpty() && isPlaying && !hasAutoNavigatedRemote) {
                     hasAutoNavigatedRemote = true
                     onNavigateToWatch()
                 }
-
-                isApplyingRemoteState = true
-
-                val ytId = getYoutubeVideoId(videoUrl)
-                if (ytId != null) {
-                    isYouTubeMode = true
-                    if (currentYtId != ytId) {
-                        currentYtId = ytId
-                        if (isPlaying) {
-                            youtubePlayer?.loadVideo(ytId, position / 1000f)
-                        } else {
-                            youtubePlayer?.cueVideo(ytId, position / 1000f)
-                        }
-                    } else {
-                        if (abs(ytCurrentTimeMs - position) > 1500L) {
-                            youtubePlayer?.seekTo(position / 1000f)
-                        }
-                        if (isPlaying) {
-                            youtubePlayer?.play()
-                        } else {
-                            youtubePlayer?.pause()
-                        }
-                    }
-                } else if (videoUrl.isNotEmpty()) {
-                    isYouTubeMode = false
-                    val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
-                    if (currentMediaUri != videoUrl) {
-                        exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
-                        exoPlayer.prepare()
-                    }
-    
-                    if (exoPlayer.playWhenReady != isPlaying) {
-                        exoPlayer.playWhenReady = isPlaying
-                    }
-    
-                    val currentPos = exoPlayer.currentPosition
-                    if (abs(currentPos - position) > 1500L) {
-                        exoPlayer.seekTo(position)
-                    }
-                } else {
-                    isYouTubeMode = false
-                }
-
-                isApplyingRemoteState = false
             }
 
             override fun onCancelled(error: DatabaseError) {}
@@ -194,201 +121,72 @@ fun RoomScreen(
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    // Setup Player listener and Lifecycle
-    DisposableEffect(exoPlayer, lifecycleOwner) {
-        val playerListener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isApplyingRemoteState) return
-                
-                val updates = mapOf(
-                    "isPlaying" to isPlaying,
-                    "position" to exoPlayer.currentPosition,
-                    "lastUpdatedBy" to uid,
-                    "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                )
-                db.updateChildren(updates)
-                exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()?.let { url ->
-                    recordContinueWatching(usersRef, uid, roomCode, url, exoPlayer.currentPosition, isYouTube = false)
-                }
-            }
-
-            override fun onPositionDiscontinuity(
-                oldPosition: Player.PositionInfo,
-                newPosition: Player.PositionInfo,
-                reason: Int
-            ) {
-                if (isApplyingRemoteState) return
-                
-                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    val updates = mapOf(
-                        "position" to newPosition.positionMs,
-                        "isPlaying" to exoPlayer.playWhenReady,
-                        "lastUpdatedBy" to uid,
-                        "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                    )
-                    db.updateChildren(updates)
-                }
-            }
-        }
-        exoPlayer.addListener(playerListener)
-        
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_PAUSE -> {
-                    exoPlayer.pause()
-                }
-                Lifecycle.Event.ON_RESUME -> {
-                    // Let Firebase state decide if it should play, or stay paused
-                }
-                else -> {}
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            exoPlayer.removeListener(playerListener)
-            exoPlayer.release()
-        }
-    }
-
     Scaffold { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
-            ReactorRoomHero(
-                roomCode = roomCode,
-                ytInputUrl = ytInputUrl,
-                onYtInputChange = { ytInputUrl = it },
-                webInputUrl = webInputUrl,
-                onWebInputChange = { webInputUrl = it },
-                onNavigateBack = onNavigateBack,
-                onNavigateToSearch = onNavigateToSearch,
-                onInviteFriends = onInviteFriends,
-                onPlayYt = {
-                    if (ytInputUrl.isNotBlank()) {
-                        val ytId = getYoutubeVideoId(ytInputUrl)
-                        val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else ytInputUrl
-                        val updates = mapOf(
-                            "videoUrl" to finalUrl,
-                            "position" to 0L,
-                            "isPlaying" to true,
-                            "lastUpdatedBy" to uid,
-                            "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                        )
-                        db.updateChildren(updates)
-                        recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                ReactorRoomHero(
+                    roomCode = roomCode,
+                    ytInputUrl = ytInputUrl,
+                    onYtInputChange = { ytInputUrl = it },
+                    webInputUrl = webInputUrl,
+                    onWebInputChange = { webInputUrl = it },
+                    onNavigateBack = onNavigateBack,
+                    onNavigateToSearch = onNavigateToSearch,
+                    onInviteFriends = onInviteFriends,
+                    onPlayYt = {
+                        if (ytInputUrl.isNotBlank()) {
+                            val ytId = getYoutubeVideoId(ytInputUrl)
+                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else ytInputUrl
+                            val updates = mapOf(
+                                "videoUrl" to finalUrl,
+                                "position" to 0L,
+                                "isPlaying" to true,
+                                "lastUpdatedBy" to uid,
+                                "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                            )
+                            db.updateChildren(updates)
+                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
 
-                        isApplyingRemoteState = true
-                        isYouTubeMode = true
-                        if (ytId != null) {
-                            currentYtId = ytId
-                            youtubePlayer?.loadVideo(ytId, 0f)
-                        }
-                        isApplyingRemoteState = false
-                        hasVideo = true
-                        onNavigateToWatch()
-                    }
-                },
-                onPlayWeb = {
-                    if (webInputUrl.isNotBlank()) {
-                        val updates = mapOf(
-                            "videoUrl" to webInputUrl,
-                            "position" to 0L,
-                            "isPlaying" to true,
-                            "lastUpdatedBy" to uid,
-                            "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                        )
-                        db.updateChildren(updates)
-                        recordContinueWatching(usersRef, uid, roomCode, webInputUrl, 0L, isYouTube = false)
-
-                        isApplyingRemoteState = true
-                        isYouTubeMode = false
-                        exoPlayer.setMediaItem(MediaItem.fromUri(webInputUrl))
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = true
-                        isApplyingRemoteState = false
-                        hasVideo = true
-                        onNavigateToWatch()
-                    }
-                }
-            )
-
-            if (hasVideo) {
-                TextButton(
-                    onClick = onNavigateToWatch,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                ) {
-                    Text("Watch Fullscreen")
-                }
-            }
-
-            // Video Player
-            if (isYouTubeMode) {
-                AndroidView(
-                    factory = { ctx ->
-                        YouTubePlayerView(ctx).apply {
-                            lifecycleOwner.lifecycle.addObserver(this)
-                            addYouTubePlayerListener(object : AbstractYouTubePlayerListener() {
-                                override fun onReady(youTubePlayer: YouTubePlayer) {
-                                    youtubePlayer = youTubePlayer
-                                    if (currentYtId.isNotEmpty()) {
-                                        youTubePlayer.loadVideo(currentYtId, ytCurrentTimeMs / 1000f)
-                                    }
-                                }
-
-                                override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
-                                    if (isApplyingRemoteState) return
-                                    val isPlaying = state == PlayerConstants.PlayerState.PLAYING
-                                    if (state == PlayerConstants.PlayerState.PLAYING || state == PlayerConstants.PlayerState.PAUSED) {
-                                        val updates = mapOf(
-                                            "isPlaying" to isPlaying,
-                                            "position" to ytCurrentTimeMs,
-                                            "lastUpdatedBy" to uid,
-                                            "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                        )
-                                        db.updateChildren(updates)
-                                    }
-                                }
-
-                                override fun onCurrentSecond(youTubePlayer: YouTubePlayer, second: Float) {
-                                    val currentMs = (second * 1000).toLong()
-                                    if (!isApplyingRemoteState) {
-                                        if (abs(currentMs - ytCurrentTimeMs) > 1500L && ytCurrentTimeMs != 0L) {
-                                            val updates = mapOf(
-                                                "position" to currentMs,
-                                                "lastUpdatedBy" to uid,
-                                                "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                            )
-                                            db.updateChildren(updates)
-                                        }
-                                    }
-                                    ytCurrentTimeMs = currentMs
-                                }
-                            })
+                            hasVideo = true
+                            onNavigateToWatch()
                         }
                     },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                )
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = true
+                    onPlayWeb = {
+                        if (webInputUrl.isNotBlank()) {
+                            val updates = mapOf(
+                                "videoUrl" to webInputUrl,
+                                "position" to 0L,
+                                "isPlaying" to true,
+                                "lastUpdatedBy" to uid,
+                                "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                            )
+                            db.updateChildren(updates)
+                            recordContinueWatching(usersRef, uid, roomCode, webInputUrl, 0L, isYouTube = false)
+
+                            hasVideo = true
+                            onNavigateToWatch()
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                    }
                 )
-            }
+
+                if (hasVideo) {
+                    TextButton(
+                        onClick = onNavigateToWatch,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                    ) {
+                        Text("Watch Fullscreen")
+                    }
+                }
+            } // Close Column
         }
     }
 }

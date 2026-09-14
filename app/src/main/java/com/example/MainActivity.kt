@@ -31,6 +31,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.ui.theme.bouncyClick
 import com.example.ui.theme.MyApplicationTheme
 import com.google.firebase.auth.FirebaseAuth
 
@@ -73,7 +74,24 @@ fun UraniumTvApp() {
 
     val startDestination = if (auth.currentUser != null) "home" else "login"
 
-    NavHost(navController = navController, startDestination = startDestination) {
+    NavHost(
+        navController = navController, 
+        startDestination = startDestination,
+        enterTransition = {
+            androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) +
+            androidx.compose.animation.slideInHorizontally(initialOffsetX = { it / 4 })
+        },
+        exitTransition = {
+            androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300))
+        },
+        popEnterTransition = {
+            androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300))
+        },
+        popExitTransition = {
+            androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300)) +
+            androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it / 4 })
+        }
+    ) {
         composable("login") {
             LoginScreen(
                 onNavigateToSignup = { navController.navigate("signup") },
@@ -236,22 +254,27 @@ fun LoginScreen(
     val context = LocalContext.current
 
     Scaffold { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+                .imePadding()
         ) {
-            BoxWithConstraints(
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(834f / 1885f)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
             ) {
-                val w = maxWidth
-                val h = maxHeight
-                val iconClearance = 0.184f
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(834f / 1885f)
+                ) {
+                    val w = maxWidth
+                    val h = maxHeight
+                    val iconClearance = 0.184f
 
-                Image(
+                    Image(
                     painter = painterResource(R.drawable.login_reactor_bg),
                     contentDescription = null,
                     contentScale = ContentScale.FillBounds,
@@ -283,21 +306,21 @@ fun LoginScreen(
                     modifier = Modifier
                         .offset(x = w * 0.2278f, y = h * 0.6446f)
                         .size(w * 0.5396f, h * 0.0637f)
-                        .clickable(onClick = { onLogin(username, password) })
+                        .bouncyClick(onClick = { onLogin(username, password) })
                 )
 
                 Box(
                     modifier = Modifier
                         .offset(x = w * 0.2698f, y = h * 0.7401f)
                         .size(w * 0.4556f, h * 0.0451f)
-                        .clickable(onClick = onNavigateToSignup)
+                        .bouncyClick(onClick = onNavigateToSignup)
                 )
 
                 Box(
                     modifier = Modifier
                         .offset(x = w * 0.4196f, y = h * 0.7958f)
                         .size(w * 0.1619f, h * 0.0637f)
-                        .clickable(onClick = {
+                        .bouncyClick(onClick = {
                             val intent = android.content.Intent(
                                 android.content.Intent.ACTION_VIEW,
                                 android.net.Uri.parse("https://instagram.com/uraniumm_235")
@@ -307,6 +330,7 @@ fun LoginScreen(
                 )
             }
         }
+    }
     }
 }
 
@@ -360,6 +384,7 @@ fun SignupScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
                 .padding(horizontal = 32.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
@@ -439,13 +464,23 @@ fun SignupScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
+                    .bouncyClick {
+                        if (password != confirmPassword) {
+                            Toast.makeText(context, "Passwords don't match", Toast.LENGTH_SHORT).show()
+                            return@bouncyClick
+                        }
+                        onSignup(name, username, password, selectedAvatarId)
+                    }
             ) {
                 Text("Create Account")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            TextButton(onClick = onNavigateToLogin) {
+            TextButton(
+                onClick = onNavigateToLogin,
+                modifier = Modifier.bouncyClick(onClick = onNavigateToLogin)
+            ) {
                 Text("Already have an account? Log In")
             }
 

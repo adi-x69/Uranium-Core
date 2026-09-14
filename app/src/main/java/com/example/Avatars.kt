@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+import com.example.ui.theme.bouncyClick
+
 /**
  * A simple preset avatar: an id (persisted per-user), an emoji glyph, and a background color.
  * No image assets are required since the emoji is drawn directly.
@@ -156,7 +158,7 @@ fun AvatarPickerGrid(
                         avatar = avatar,
                         size = 56.dp,
                         selected = avatar.id == selectedId,
-                        modifier = Modifier.clickable { onSelect(avatar.id) }
+                        modifier = Modifier.bouncyClick { onSelect(avatar.id) }
                     )
                 }
             }

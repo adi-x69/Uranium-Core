@@ -25,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.*
+import com.example.ui.theme.bouncyClick
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -39,6 +42,18 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
+
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.foundation.Canvas
+import kotlin.math.sin
 
 data class WatchInvite(
     val id: String,
@@ -144,13 +159,18 @@ fun HomeScreen(
     }
 
     Scaffold { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState()),
+                .imePadding()
         ) {
-            ReactorHomeHero(
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                ReactorHomeHero(
                 myAvatarId = myAvatarId,
                 joinRoomCode = joinRoomCode,
                 onJoinRoomCodeChange = { joinRoomCode = it },
@@ -205,58 +225,61 @@ fun HomeScreen(
                 },
                 onNavigateToFriends = onNavigateToFriends
             )
+            } // Close the scrollable Column
 
-            AnimatedVisibility(
-                visible = onlineFriends.isNotEmpty(),
-                enter = fadeIn(UraniumMotion.fade()),
-                exit = fadeOut(UraniumMotion.fade())
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OnlineFriendsRow(friends = onlineFriends, onClick = { onNavigateToFriends() })
-            }
+                AnimatedVisibility(
+                    visible = onlineFriends.isNotEmpty(),
+                    enter = fadeIn(UraniumMotion.fade()),
+                    exit = fadeOut(UraniumMotion.fade())
+                ) {
+                    OnlineFriendsRow(friends = onlineFriends, onClick = { onNavigateToFriends() })
+                }
 
-            AnimatedVisibility(
-                visible = continueWatching.isNotEmpty(),
-                enter = fadeIn(UraniumMotion.fade()),
-                exit = fadeOut(UraniumMotion.fade())
-            ) {
-                ContinueWatchingRow(
-                    entries = continueWatching,
-                    onResume = { entry -> onNavigateToWatch(entry.roomCode) }
-                )
-            }
-
-            if (invites.isNotEmpty()) {
-                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
-                    Text(
-                        "Watch Invites",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                AnimatedVisibility(
+                    visible = continueWatching.isNotEmpty(),
+                    enter = fadeIn(UraniumMotion.fade()),
+                    exit = fadeOut(UraniumMotion.fade())
+                ) {
+                    ContinueWatchingRow(
+                        entries = continueWatching,
+                        onResume = { entry -> onNavigateToWatch(entry.roomCode) }
                     )
-                    invites.forEach { invite ->
-                        Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${invite.fromUsername} invited you to Room ${invite.roomCode}",
-                                    modifier = Modifier.weight(1f)
-                                )
-                                TextButton(onClick = {
-                                    db.child("users").child(uid).child("watchInvites")
-                                        .child(invite.id).removeValue()
-                                    onNavigateToRoom(invite.roomCode)
-                                }) { Text("Join") }
-                                TextButton(onClick = {
-                                    db.child("users").child(uid).child("watchInvites")
-                                        .child(invite.id).removeValue()
-                                }) { Text("Dismiss") }
+                }
+
+                if (invites.isNotEmpty()) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+                        invites.forEach { invite ->
+                            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${invite.fromUsername} invited you to Room ${invite.roomCode}",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = {
+                                        db.child("users").child(uid).child("watchInvites")
+                                            .child(invite.id).removeValue()
+                                        onNavigateToRoom(invite.roomCode)
+                                    }) { Text("Join") }
+                                    TextButton(onClick = {
+                                        db.child("users").child(uid).child("watchInvites")
+                                            .child(invite.id).removeValue()
+                                    }) { Text("Dismiss") }
+                                }
                             }
                         }
                     }
                 }
             }
-
         }
     }
 }
@@ -297,16 +320,80 @@ private fun ReactorHomeHero(
             modifier = Modifier.fillMaxSize()
         )
 
+        // Continuous breathing animation for primary action buttons and glow
+        val infiniteTransition = rememberInfiniteTransition(label = "heroBreathing")
+        
+        // Ambient Plasma Glow
+        val glowAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.0f,
+            targetValue = 0.5f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "glowAlpha"
+        )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFFF3300).copy(alpha = glowAlpha), Color.Transparent),
+                    center = Offset(size.width * 0.43f, size.height * 0.35f),
+                    radius = size.width * 0.6f
+                )
+            )
+        }
+
+        // Live Spinning Reactor Core
+        AnimatedReactorCore(
+            modifier = Modifier
+                .offset(x = w * 0.285f, y = h * 0.292f)
+                .size(w * 0.283f, w * 0.283f)
+        )
+
+        // Live Dynamic Waveforms (Left and Right of "STAY FUSION")
+        AnimatedWaveform(
+            modifier = Modifier
+                .offset(x = w * 0.165f, y = h * 0.44f)
+                .size(w * 0.15f, h * 0.02f),
+            isReversed = false
+        )
+        AnimatedWaveform(
+            modifier = Modifier
+                .offset(x = w * 0.695f, y = h * 0.44f)
+                .size(w * 0.15f, h * 0.02f),
+            isReversed = true
+        )
+
         // Profile avatar, sitting where the radioactive icon panel is in the artwork.
         Box(
             modifier = Modifier
                 .offset(x = w * 0.706f, y = h * 0.066f)
                 .size(w * 0.150f, h * 0.066f)
-                .clickable(onClick = onNavigateToProfile),
+                .bouncyClick(onClick = onNavigateToProfile),
             contentAlignment = Alignment.Center
         ) {
             AvatarCircle(avatar = avatarById(myAvatarId), size = w * 0.11f)
         }
+
+        // Continuous breathing animation for primary action buttons
+        val pulseScale by infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.04f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+        val pulseAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.8f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseAlpha"
+        )
 
         Image(
             painter = painterResource(R.drawable.btn_create_room),
@@ -315,7 +402,12 @@ private fun ReactorHomeHero(
             modifier = Modifier
                 .offset(x = w * 0.2168f, y = h * 0.4688f)
                 .size(w * 0.5677f, h * 0.0844f)
-                .clickable(enabled = !busy, onClick = onCreateRoom)
+                .graphicsLayer {
+                    scaleX = pulseScale
+                    scaleY = pulseScale
+                    alpha = pulseAlpha
+                }
+                .bouncyClick { if (!busy) onCreateRoom() }
         )
 
         Box(
@@ -355,7 +447,12 @@ private fun ReactorHomeHero(
             modifier = Modifier
                 .offset(x = w * 0.2371f, y = h * 0.7208f)
                 .size(w * 0.5329f, h * 0.0785f)
-                .clickable(enabled = !busy, onClick = onJoinRoom)
+                .graphicsLayer {
+                    scaleX = pulseScale
+                    scaleY = pulseScale
+                    alpha = pulseAlpha
+                }
+                .bouncyClick { if (!busy) onJoinRoom() }
         )
 
         Image(
@@ -365,7 +462,7 @@ private fun ReactorHomeHero(
             modifier = Modifier
                 .offset(x = w * 0.3401f, y = h * 0.8333f)
                 .size(w * 0.3198f, h * 0.0531f)
-                .clickable(onClick = onNavigateToFriends)
+                .bouncyClick(onClick = onNavigateToFriends)
         )
     }
 }
@@ -388,7 +485,7 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.width(64.dp)
                 ) {
-                    Box {
+                    Box(modifier = Modifier.bouncyClick { onClick() }) {
                         AvatarCircle(avatar = avatarById(friend.avatarId), size = 52.dp)
                         Box(
                             modifier = Modifier
@@ -448,7 +545,10 @@ private fun ContinueWatchingRow(entries: List<ContinueWatchingEntry>, onResume: 
                                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            IconButton(onClick = { onResume(entry) }) {
+                            IconButton(
+                                onClick = { onResume(entry) },
+                                modifier = Modifier.bouncyClick { onResume(entry) }
+                            ) {
                                 Icon(
                                     Icons.Default.PlayArrow,
                                     contentDescription = "Resume",
@@ -472,6 +572,126 @@ private fun ContinueWatchingRow(entries: List<ContinueWatchingEntry>, onResume: 
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AnimatedReactorCore(modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "reactorSpin")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "spin"
+    )
+
+    Canvas(modifier = modifier) {
+        val center = Offset(size.width / 2, size.height / 2)
+        val outerRadius = size.minDimension / 2f
+        
+        // Draw a dark background to mask the static icon
+        drawCircle(
+            color = Color(0xFF100202), // very dark red/black
+            radius = outerRadius * 0.95f,
+            center = center,
+            style = Fill
+        )
+
+        // Then draw the spinning symbol
+        withTransform({
+            rotate(rotation, center)
+        }) {
+            val innerRadius = outerRadius * 0.22f
+            val wedgeRadius = outerRadius * 0.85f
+
+            val path = Path().apply {
+                for (i in 0 until 3) {
+                    val angleOffset = i * 120f
+                    moveTo(center.x, center.y)
+                    arcTo(
+                        rect = Rect(center.x - wedgeRadius, center.y - wedgeRadius, center.x + wedgeRadius, center.y + wedgeRadius),
+                        startAngleDegrees = angleOffset + 60f,
+                        sweepAngleDegrees = 60f,
+                        forceMoveTo = false
+                    )
+                    close()
+                }
+            }
+            
+            drawPath(
+                path = path,
+                color = Color(0xFFFF3300), // glowing red/orange
+                style = Fill,
+                alpha = 0.95f
+            )
+            // inner center circle
+            drawCircle(
+                color = Color(0xFFFF3300),
+                radius = innerRadius,
+                center = center
+            )
+            // cutout
+            drawCircle(
+                color = Color(0xFF100202),
+                radius = innerRadius * 0.35f,
+                center = center
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnimatedWaveform(modifier: Modifier = Modifier, isReversed: Boolean = false) {
+    val infiniteTransition = rememberInfiniteTransition(label = "waveform")
+    val time by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(tween(2000, easing = LinearEasing)),
+        label = "time"
+    )
+
+    Canvas(modifier = modifier) {
+        val barCount = 15
+        val barWidth = size.width / (barCount * 2)
+        val maxBarHeight = size.height
+
+        // Draw sine wave
+        val wavePath = Path().apply {
+            moveTo(0f, size.height / 2f)
+            for (x in 0..size.width.toInt() step 2) {
+                val normalizedX = x / size.width
+                val dir = if (isReversed) -1f else 1f
+                val waveY = sin(normalizedX * 4 * Math.PI + (time * dir)) * (size.height * 0.3)
+                lineTo(x.toFloat(), size.height / 2f + waveY.toFloat())
+            }
+        }
+        drawPath(
+            path = wavePath,
+            color = Color(0xFFFF5A5A),
+            style = Stroke(width = 2f.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+            alpha = 0.6f
+        )
+        
+        // Draw equalizer bars
+        for (i in 0 until barCount) {
+            val x = i * (barWidth * 2) + barWidth / 2
+            val phase = i * 0.6f
+            val dir = if (isReversed) -1f else 1f
+            val heightMult = (sin(time * 3 * dir + phase) + 1f) / 2f // 0 to 1
+            val height = maxBarHeight * heightMult * 0.6f + maxBarHeight * 0.2f
+            
+            drawLine(
+                color = Color(0xFFFF3300),
+                start = Offset(x, size.height / 2f - height / 2f),
+                end = Offset(x, size.height / 2f + height / 2f),
+                strokeWidth = barWidth * 0.8f,
+                cap = StrokeCap.Round,
+                alpha = 0.8f
+            )
         }
     }
 }
