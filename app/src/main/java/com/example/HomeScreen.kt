@@ -346,21 +346,21 @@ private fun ReactorHomeHero(
         // Live Spinning Reactor Core
         AnimatedReactorCore(
             modifier = Modifier
-                .offset(x = w * 0.285f, y = h * 0.292f)
-                .size(w * 0.283f, w * 0.283f)
+                .offset(x = w * 0.335f, y = h * 0.214f)
+                .size(w * 0.33f, w * 0.33f)
         )
 
         // Live Dynamic Waveforms (Left and Right of "STAY FUSION")
         AnimatedWaveform(
             modifier = Modifier
-                .offset(x = w * 0.165f, y = h * 0.44f)
-                .size(w * 0.15f, h * 0.02f),
+                .offset(x = w * 0.190f, y = h * 0.454f)
+                .size(w * 0.15f, h * 0.018f),
             isReversed = false
         )
         AnimatedWaveform(
             modifier = Modifier
-                .offset(x = w * 0.695f, y = h * 0.44f)
-                .size(w * 0.15f, h * 0.02f),
+                .offset(x = w * 0.665f, y = h * 0.454f)
+                .size(w * 0.15f, h * 0.018f),
             isReversed = true
         )
 
@@ -583,64 +583,36 @@ private fun AnimatedReactorCore(modifier: Modifier = Modifier) {
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(4000, easing = LinearEasing),
+            animation = tween(6000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "spin"
     )
 
-    Canvas(modifier = modifier) {
-        val center = Offset(size.width / 2, size.height / 2)
-        val outerRadius = size.minDimension / 2f
-        
-        // Draw a dark background to mask the static icon
-        drawCircle(
-            color = Color(0xFF100202), // very dark red/black
-            radius = outerRadius * 0.95f,
-            center = center,
-            style = Fill
-        )
-
-        // Then draw the spinning symbol
-        withTransform({
-            rotate(rotation, center)
-        }) {
-            val innerRadius = outerRadius * 0.22f
-            val wedgeRadius = outerRadius * 0.85f
-
-            val path = Path().apply {
-                for (i in 0 until 3) {
-                    val angleOffset = i * 120f
-                    moveTo(center.x, center.y)
-                    arcTo(
-                        rect = Rect(center.x - wedgeRadius, center.y - wedgeRadius, center.x + wedgeRadius, center.y + wedgeRadius),
-                        startAngleDegrees = angleOffset + 60f,
-                        sweepAngleDegrees = 60f,
-                        forceMoveTo = false
-                    )
-                    close()
-                }
-            }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center = Offset(size.width / 2, size.height / 2)
+            val outerRadius = size.minDimension / 2f
             
-            drawPath(
-                path = path,
-                color = Color(0xFFFF3300), // glowing red/orange
-                style = Fill,
-                alpha = 0.95f
-            )
-            // inner center circle
+            // Solid dark core mask perfectly sized to hide the static lines 
+            // without bleeding outside the bounds of the PNG image
             drawCircle(
-                color = Color(0xFFFF3300),
-                radius = innerRadius,
-                center = center
-            )
-            // cutout
-            drawCircle(
-                color = Color(0xFF100202),
-                radius = innerRadius * 0.35f,
+                color = Color(0xFF100202), // Very dark red/black matching the background
+                radius = outerRadius * 0.96f,
                 center = center
             )
         }
+        
+        Image(
+            painter = painterResource(R.drawable.nuclear_radiation),
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationZ = rotation
+                }
+        )
     }
 }
 
@@ -658,6 +630,13 @@ private fun AnimatedWaveform(modifier: Modifier = Modifier, isReversed: Boolean 
         val barCount = 15
         val barWidth = size.width / (barCount * 2)
         val maxBarHeight = size.height
+
+        // Soft mask to hide static waveform
+        drawRoundRect(
+            color = Color(0xFF150202).copy(alpha = 0.85f),
+            size = size,
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2, size.height / 2)
+        )
 
         // Draw sine wave
         val wavePath = Path().apply {
