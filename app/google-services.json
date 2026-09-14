@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "305050970719",
+    "project_id": "uranium-tv-core",
+    "storage_bucket": "uranium-tv-core.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:305050970719:android:c5a09e8b7c8728bc7289ea",
+        "android_client_info": {
+          "package_name": "com.uranium.tv"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAshYZdK3GcT8_r0IoJTG5uNVH1V_oCZIA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
