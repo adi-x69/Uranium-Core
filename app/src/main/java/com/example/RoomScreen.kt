@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -226,6 +227,35 @@ private fun ReactorRoomHero(
             contentDescription = null,
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxSize()
+        )
+
+        // DNA Animation Overlay
+        val context = LocalContext.current
+        val imageLoader = remember {
+            coil.ImageLoader.Builder(context)
+                .components {
+                    if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        add(coil.decode.ImageDecoderDecoder.Factory())
+                    } else {
+                        add(coil.decode.GifDecoder.Factory())
+                    }
+                }
+                .build()
+        }
+
+        Image(
+            painter = coil.compose.rememberAsyncImagePainter(
+                model = coil.request.ImageRequest.Builder(context)
+                    .data(R.drawable.dna_animation)
+                    .build(),
+                imageLoader = imageLoader
+            ),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            alignment = Alignment.BottomCenter,
+            modifier = Modifier
+                .offset(x = 0.dp, y = h * 0.355f)
+                .size(w, h * 0.645f)
         )
 
         // Back button
