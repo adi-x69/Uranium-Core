@@ -1,7 +1,12 @@
 package com.example
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -31,6 +36,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.SignalWifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -278,6 +284,34 @@ fun WatchScreen(
         exoPlayer.seekTo(lastKnownPosition + elapsed)
         showSyncNowButton = false
     }
+
+    // ---- Network status icon: shows if EITHER person has a connection issue -
+    // my phone's actual network state (wifi/data lost or unvalidated), OR
+    // either side's video buffering. Hidden entirely when everything's fine. ----
+    var hasNetworkIssue by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        fun isValidated(network: Network?): Boolean {
+            val caps = network?.let { connectivityManager.getNetworkCapabilities(it) }
+            return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) { hasNetworkIssue = true }
+            override fun onUnavailable() { hasNetworkIssue = true }
+            override fun onAvailable(network: Network) { hasNetworkIssue = !isValidated(network) }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                hasNetworkIssue = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+        }
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        connectivityManager.registerNetworkCallback(request, callback)
+        hasNetworkIssue = !isValidated(connectivityManager.activeNetwork)
+        onDispose { connectivityManager.unregisterNetworkCallback(callback) }
+    }
+    val videoBufferIssue = !isYouTubeMode && (localPlaybackState == Player.STATE_BUFFERING || othersBuffering != null)
+    val connectionIssue = hasNetworkIssue || videoBufferIssue
 
     fun pushPlaybackUpdate(playing: Boolean, positionMs: Long) {
         db.updateChildren(
@@ -725,6 +759,29 @@ fun WatchScreen(
                             text = "$name's connection is buffering — paused",
                             color = Color.White,
                             style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
+
+            // Small always-visible network/connection issue icon near the back
+            // button - shows for EITHER person's issue, independent of the
+            // controls auto-hide timer, disappears the moment things are fine.
+            if (connectionIssue) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.6f),
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 56.dp, top = 12.dp)
+                        .size(28.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.SignalWifiOff,
+                            contentDescription = "Connection issue",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
