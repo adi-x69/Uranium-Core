@@ -31,12 +31,14 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
 import com.google.firebase.database.FirebaseDatabase
 import androidx.compose.ui.Alignment
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
@@ -71,6 +73,82 @@ fun RoomScreen(
 
     var ytInputUrl by remember { mutableStateOf("") }
     var webInputUrl by remember { mutableStateOf("") }
+
+    // ---- Room-entry join notifications (separate from WatchScreen's own
+    // participants/join-leave banner system, which stays as-is). Uses its
+    // own "roomPresence" node so entering/leaving RoomScreen never triggers
+    // WatchScreen's banners and vice versa. ----
+    var myUsername by remember { mutableStateOf("") }
+    var hostUid by remember { mutableStateOf("") }
+    var hostUsername by remember { mutableStateOf("") }
+    var hasShownSelfJoinToast by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(uid) {
+        if (uid.isEmpty()) return@LaunchedEffect
+        usersRef.child(uid).child("username").get()
+            .addOnSuccessListener { myUsername = it.getValue(String::class.java) ?: "Someone" }
+    }
+
+    LaunchedEffect(roomCode) {
+        db.child("hostUid").get().addOnSuccessListener { snap ->
+            val hUid = snap.getValue(String::class.java) ?: ""
+            hostUid = hUid
+            if (hUid.isNotEmpty()) {
+                usersRef.child(hUid).child("username").get()
+                    .addOnSuccessListener { hostUsername = it.getValue(String::class.java) ?: "" }
+            }
+        }
+    }
+
+    val presenceRef = remember(roomCode, uid) { db.child("roomPresence").child(uid) }
+    DisposableEffect(roomCode, uid) {
+        if (uid.isNotEmpty()) presenceRef.onDisconnect().removeValue()
+        onDispose { presenceRef.removeValue() }
+    }
+    LaunchedEffect(roomCode, uid, myUsername) {
+        if (uid.isNotEmpty() && myUsername.isNotEmpty()) {
+            presenceRef.setValue(mapOf("username" to myUsername))
+        }
+    }
+
+    // "You joined <host>'s room" - shown once to me, only if I'm not the host.
+    LaunchedEffect(uid, hostUid, hostUsername) {
+        if (uid.isNotEmpty() && hostUid.isNotEmpty() && uid != hostUid && !hasShownSelfJoinToast) {
+            hasShownSelfJoinToast = true
+            snackbarHostState.showSnackbar("You joined ${hostUsername.ifEmpty { "the host" }}'s room")
+        }
+    }
+
+    // "<username> has joined the room" - shown to everyone already present
+    // when someone new shows up.
+    DisposableEffect(roomCode, uid) {
+        val presenceRootRef = db.child("roomPresence")
+        val listener = object : ChildEventListener {
+            override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
+                val pid = snapshot.key ?: return
+                if (pid == uid) return
+                val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("$username has joined the room")
+                }
+            }
+            override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onChildRemoved(snapshot: DataSnapshot) {
+                val pid = snapshot.key ?: return
+                if (pid == uid) return
+                val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("$username has left the room")
+                }
+            }
+            override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        presenceRootRef.addChildEventListener(listener)
+        onDispose { presenceRootRef.removeEventListener(listener) }
+    }
 
     LaunchedEffect(selectedVideoIdFromSearch) {
         if (selectedVideoIdFromSearch != null) {
@@ -122,7 +200,9 @@ fun RoomScreen(
         }
     }
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
