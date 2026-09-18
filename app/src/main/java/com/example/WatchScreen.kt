@@ -22,12 +22,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -203,6 +205,80 @@ fun WatchScreen(
             .build().apply { playWhenReady = false }
     }
 
+    // ---- Buffering sync (ExoPlayer/direct-URL mode only, not YouTube) ----
+    // When my player stalls, I broadcast that to the room so the other person
+    // auto-pauses instead of running ahead. When THEIR buffer entry appears, I
+    // pause locally (not pushed to the shared isPlaying state - just a local
+    // hold). When it clears, I resume and correct for whatever drift built up.
+    var localPlaybackState by remember { mutableStateOf(Player.STATE_IDLE) }
+    var othersBuffering by remember { mutableStateOf<String?>(null) }
+    var showSyncNowButton by remember { mutableStateOf(false) }
+    var lastKnownPosition by remember { mutableStateOf(0L) }
+    var lastKnownPositionAtLocalMs by remember { mutableStateOf(0L) }
+    val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
+
+    DisposableEffect(roomCode, uid) {
+        if (uid.isNotEmpty()) bufferingRef.onDisconnect().removeValue()
+        onDispose { bufferingRef.removeValue() }
+    }
+
+    // Broadcast my own buffering state, debounced so a brief blip doesn't
+    // trigger a pause on the other side.
+    LaunchedEffect(localPlaybackState, isYouTubeMode) {
+        if (isYouTubeMode) return@LaunchedEffect
+        if (localPlaybackState == Player.STATE_BUFFERING) {
+            delay(400)
+            if (localPlaybackState == Player.STATE_BUFFERING) {
+                bufferingRef.setValue(
+                    mapOf("username" to myUsername.ifEmpty { "Your friend" }, "at" to ServerValue.TIMESTAMP)
+                )
+            }
+        } else {
+            bufferingRef.removeValue()
+        }
+    }
+
+    // Watch for the OTHER person's buffering entry (symmetric: works whether
+    // I'm host or just a viewer).
+    DisposableEffect(roomCode, uid) {
+        val bufferingRootRef = db.child("buffering")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val otherEntry = snapshot.children.firstOrNull { it.key != uid }
+                othersBuffering = otherEntry?.child("username")?.getValue(String::class.java)
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        bufferingRootRef.addValueEventListener(listener)
+        onDispose { bufferingRootRef.removeEventListener(listener) }
+    }
+
+    // React to the other person's buffering state changing.
+    LaunchedEffect(othersBuffering) {
+        if (isYouTubeMode) return@LaunchedEffect
+        if (othersBuffering != null) {
+            exoPlayer.playWhenReady = false
+        } else if (isPlayingState) {
+            // Recovered: estimate where playback should be now and correct.
+            val elapsed = System.currentTimeMillis() - lastKnownPositionAtLocalMs
+            val expectedPos = lastKnownPosition + elapsed
+            val drift = abs(exoPlayer.currentPosition - expectedPos)
+            if (drift > 4000L) {
+                showSyncNowButton = true
+            } else if (drift > 0L) {
+                exoPlayer.seekTo(expectedPos)
+                showSyncNowButton = false
+            }
+            exoPlayer.playWhenReady = true
+        }
+    }
+
+    fun syncNow() {
+        val elapsed = System.currentTimeMillis() - lastKnownPositionAtLocalMs
+        exoPlayer.seekTo(lastKnownPosition + elapsed)
+        showSyncNowButton = false
+    }
+
     fun pushPlaybackUpdate(playing: Boolean, positionMs: Long) {
         db.updateChildren(
             mapOf(
@@ -238,6 +314,8 @@ fun WatchScreen(
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
                 val position = snapshot.child("position").getValue(Long::class.java) ?: 0L
                 isPlayingState = isPlaying
+                lastKnownPosition = position
+                lastKnownPositionAtLocalMs = System.currentTimeMillis()
 
                 isApplyingRemoteState = true
                 val ytId = getYoutubeVideoId(videoUrl)
@@ -279,6 +357,9 @@ fun WatchScreen(
                 if (isApplyingRemoteState || !canControl) return
                 pushPlaybackUpdate(isPlaying, exoPlayer.currentPosition)
             }
+            override fun onPlaybackStateChanged(state: Int) {
+                localPlaybackState = state
+            }
         }
         exoPlayer.addListener(playerListener)
         onDispose {
@@ -303,7 +384,10 @@ fun WatchScreen(
         if (isChatMode) return@LaunchedEffect // controls stay visible in chat mode
         delay(3000)
         controlsVisible = false
-        isEmojiPickerOpen = false
+        // Emoji picker is intentionally NOT closed here - it stays open while
+        // browsing regardless of the controls-hide timer. It only closes when
+        // an emoji is picked, the video area is tapped, or its own close
+        // button is used.
     }
 
     fun applyOrientation(landscape: Boolean) {
@@ -502,7 +586,10 @@ fun WatchScreen(
                 .background(Color.Black)
                 .pointerInput(canControl) {
                     detectTapGestures(
-                        onTap = { bumpInteraction() },
+                        onTap = {
+                            if (isEmojiPickerOpen) isEmojiPickerOpen = false
+                            bumpInteraction()
+                        },
                         onDoubleTap = { offset ->
                             if (!canControl) return@detectTapGestures
                             val third = size.width / 3
@@ -616,6 +703,56 @@ fun WatchScreen(
                 }
             }
 
+            // Persistent "friend is buffering" banner - stays up the whole time,
+            // not a quick toast, and isn't tied to the controls auto-hide timer.
+            othersBuffering?.let { name ->
+                Surface(
+                    color = Color.Black.copy(alpha = 0.75f),
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "$name's connection is buffering — paused",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
+
+            // Shown after recovering from a buffer if the drift was too big to
+            // silently auto-correct; tap to snap back in sync.
+            if (showSyncNowButton) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 140.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { syncNow() }
+                ) {
+                    Text(
+                        text = "Sync now",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
             // Auto-hiding controls overlay (hidden entirely while in chat mode)
             AnimatedVisibility(
                 visible = controlsVisible && !isChatMode,
@@ -659,6 +796,7 @@ fun WatchScreen(
                         pushPlaybackUpdate(isPlayingState, targetMs)
                         bumpInteraction()
                     },
+                    isLandscape = isLandscape,
                     onToggleLandscape = { toggleLandscape() },
                     onOpenChat = { openChat() },
                     onToggleEmojiPicker = { isEmojiPickerOpen = !isEmojiPickerOpen; bumpInteraction() },
@@ -675,10 +813,13 @@ fun WatchScreen(
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 72.dp)
             ) {
-                EmojiPickerRow(onPick = { emoji ->
-                    sendReaction(emoji)
-                    isEmojiPickerOpen = false
-                })
+                EmojiPickerRow(
+                    onPick = { emoji ->
+                        sendReaction(emoji)
+                        isEmojiPickerOpen = false
+                    },
+                    onClose = { isEmojiPickerOpen = false }
+                )
             }
         }
     }
@@ -785,6 +926,7 @@ private fun PlayerControlsOverlay(
     onSkipBack: () -> Unit,
     onSkipForward: () -> Unit,
     onSeek: (Long) -> Unit,
+    isLandscape: Boolean,
     onToggleLandscape: () -> Unit,
     onOpenChat: () -> Unit,
     onToggleEmojiPicker: () -> Unit,
@@ -882,7 +1024,11 @@ private fun PlayerControlsOverlay(
                     Icon(Icons.Default.Chat, contentDescription = "Chat", tint = Color.White)
                 }
                 IconButton(onClick = onToggleLandscape) {
-                    Icon(Icons.Default.ScreenRotation, contentDescription = "Rotate", tint = Color.White)
+                    Icon(
+                        if (isLandscape) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        contentDescription = if (isLandscape) "Exit fullscreen" else "Fullscreen",
+                        tint = Color.White
+                    )
                 }
             }
         }
@@ -890,22 +1036,32 @@ private fun PlayerControlsOverlay(
 }
 
 @Composable
-private fun EmojiPickerRow(onPick: (String) -> Unit) {
+private fun EmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
     Surface(color = Color.Black.copy(alpha = 0.6f), shape = MaterialTheme.shapes.medium) {
-        LazyRow(
-            modifier = Modifier.padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(REACTION_EMOJIS) { emoji ->
-                Text(
-                    text = emoji,
-                    fontSize = TextUnit(26f, TextUnitType.Sp),
-                    modifier = Modifier
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { onPick(emoji) }
-                        .padding(6.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LazyRow(
+                modifier = Modifier.padding(8.dp).weight(1f, fill = false),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(REACTION_EMOJIS) { emoji ->
+                    Text(
+                        text = emoji,
+                        fontSize = TextUnit(26f, TextUnitType.Sp),
+                        modifier = Modifier
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { onPick(emoji) }
+                            .padding(6.dp)
+                    )
+                }
+            }
+            IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Close reactions",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
