@@ -4,6 +4,8 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +35,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -256,24 +260,74 @@ fun HomeScreen(
                 if (invites.isNotEmpty()) {
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
                         invites.forEach { invite ->
-                            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                            key(invite.id) {
+                                AnimatedVisibility(
+                                    visible = true,
+                                    enter = scaleIn(
+                                        initialScale = 0.6f,
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                                            stiffness = Spring.StiffnessLow
+                                        )
+                                    ) + fadeIn(animationSpec = tween(180)),
+                                    exit = fadeOut(UraniumMotion.fade())
                                 ) {
-                                    Text(
-                                        text = "${invite.fromUsername} invited you to Room ${invite.roomCode}",
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    TextButton(onClick = {
-                                        db.child("users").child(uid).child("watchInvites")
-                                            .child(invite.id).removeValue()
-                                        onNavigateToRoom(invite.roomCode)
-                                    }) { Text("Join") }
-                                    TextButton(onClick = {
-                                        db.child("users").child(uid).child("watchInvites")
-                                            .child(invite.id).removeValue()
-                                    }) { Text("Dismiss") }
+                                    Surface(
+                                        color = com.example.ui.theme.AbyssSurfaceElevated,
+                                        shape = RoundedCornerShape(16.dp),
+                                        border = BorderStroke(1.5.dp, com.example.ui.theme.CrimsonCore),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .clip(CircleShape)
+                                                    .background(com.example.ui.theme.CrimsonCore.copy(alpha = 0.18f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("🎬", fontSize = 18.sp)
+                                            }
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = invite.fromUsername,
+                                                    color = com.example.ui.theme.MistText,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 15.sp
+                                                )
+                                                Text(
+                                                    text = "invited you to watch · Room ${invite.roomCode}",
+                                                    color = com.example.ui.theme.MistTextMuted,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                            TextButton(onClick = {
+                                                db.child("users").child(uid).child("watchInvites")
+                                                    .child(invite.id).removeValue()
+                                                onNavigateToRoom(invite.roomCode)
+                                            }) {
+                                                Text(
+                                                    "Join",
+                                                    color = com.example.ui.theme.CrimsonCore,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            IconButton(onClick = {
+                                                db.child("users").child(uid).child("watchInvites")
+                                                    .child(invite.id).removeValue()
+                                            }) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Dismiss",
+                                                    tint = com.example.ui.theme.MistTextMuted
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
