@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SignalWifiOff
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -107,6 +108,9 @@ private data class ParticipantInfo(val uid: String, val username: String, val av
 /** A transient "X joined" / "X left" banner shown over the video. */
 private data class BannerEntry(val key: String, val text: String)
 
+/** A transient play/pause notification banner shown over the video. */
+private data class PlaybackBannerEntry(val key: String, val text: String, val isPlaying: Boolean)
+
 private fun watchDbRef(roomCode: String) = FirebaseDatabase
     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
     .reference.child("rooms").child(roomCode)
@@ -157,6 +161,7 @@ fun WatchScreen(
 
     var participants by remember { mutableStateOf<List<ParticipantInfo>>(emptyList()) }
     val joinLeaveBanners = remember { mutableStateListOf<BannerEntry>() }
+    val playbackBanners = remember { mutableStateListOf<PlaybackBannerEntry>() }
 
     DisposableEffect(roomCode) {
         val participantsRef = db.child("participants")
@@ -215,6 +220,7 @@ fun WatchScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var interactionTick by remember { mutableStateOf(0) }
     var isLandscape by remember { mutableStateOf(false) }
+    var wasLandscapeBeforeChat by remember { mutableStateOf(false) }
     var isChatMode by remember { mutableStateOf(false) }
     var isEmojiPickerOpen by remember { mutableStateOf(false) }
 
@@ -404,6 +410,7 @@ fun WatchScreen(
     }
 
     // Mirror room state
+    var prevRoomPlaying by remember { mutableStateOf<Boolean?>(null) }
     DisposableEffect(roomCode) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -418,6 +425,13 @@ fun WatchScreen(
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
                 val position = snapshot.child("position").getValue(Long::class.java) ?: 0L
                 val lastUpdatedAt = snapshot.child("lastUpdatedAt").getValue(Long::class.java) ?: 0L
+
+                if (!isSelfEcho && prevRoomPlaying != null && prevRoomPlaying != isPlaying && lastUpdatedBy.isNotEmpty()) {
+                    val actorName = participants.find { it.uid == lastUpdatedBy }?.username ?: "Someone"
+                    val actionText = if (isPlaying) "$actorName played the video" else "$actorName paused the video"
+                    playbackBanners.add(PlaybackBannerEntry("playstate-${System.nanoTime()}", actionText, isPlaying))
+                }
+                prevRoomPlaying = isPlaying
 
                 lastKnownPosition = position
                 lastUpdatedAtSnapshot = lastUpdatedAt
@@ -524,6 +538,7 @@ fun WatchScreen(
     }
 
     fun openChat() {
+        wasLandscapeBeforeChat = isLandscape
         isChatMode = true
         isLandscape = false
         applyOrientation(false)
@@ -531,6 +546,11 @@ fun WatchScreen(
 
     fun closeChat() {
         isChatMode = false
+        if (wasLandscapeBeforeChat) {
+            isLandscape = true
+            applyOrientation(true)
+            wasLandscapeBeforeChat = false
+        }
         bumpInteraction()
     }
 
@@ -783,7 +803,7 @@ fun WatchScreen(
                 }
             }
 
-            // Join/leave banners, stacked at the top, auto-dismissing
+            // Join/leave and playback banners, stacked at the top, auto-dismissing
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -793,6 +813,11 @@ fun WatchScreen(
                 joinLeaveBanners.forEach { entry ->
                     key(entry.key) {
                         JoinLeaveBanner(entry) { joinLeaveBanners.remove(entry) }
+                    }
+                }
+                playbackBanners.forEach { entry ->
+                    key(entry.key) {
+                        PlaybackNotificationBanner(entry) { playbackBanners.remove(entry) }
                     }
                 }
             }
@@ -847,12 +872,12 @@ fun WatchScreen(
                 }
             }
 
-            // Shown after recovering from a buffer if the drift was too big to
-            // silently auto-correct; tap to snap back in sync.
+            // Shown when playback is drifted/out of sync; tap to snap back in sync.
             if (showSyncNowButton) {
                 Surface(
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     shape = MaterialTheme.shapes.medium,
+                    shadowElevation = 6.dp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 140.dp)
@@ -861,12 +886,23 @@ fun WatchScreen(
                             indication = null
                         ) { syncNow() }
                 ) {
-                    Text(
-                        text = "Sync now",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Sync,
+                            contentDescription = "Sync",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "⚠️ Playback out of sync — Tap to sync with room",
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 }
             }
 
@@ -1013,6 +1049,42 @@ private fun JoinLeaveBanner(entry: BannerEntry, onDone: () -> Unit) {
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
         )
+    }
+}
+
+@Composable
+private fun PlaybackNotificationBanner(entry: PlaybackBannerEntry, onDone: () -> Unit) {
+    val alpha = remember { Animatable(0f) }
+    LaunchedEffect(entry.key) {
+        alpha.animateTo(1f, animationSpec = tween(200))
+        delay(2500)
+        alpha.animateTo(0f, animationSpec = tween(400))
+        onDone()
+    }
+    Surface(
+        color = Color.Black.copy(alpha = 0.75f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .padding(vertical = 4.dp)
+            .alpha(alpha.value)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = if (entry.isPlaying) Icons.Default.PlayArrow else Icons.Default.Pause,
+                contentDescription = null,
+                tint = if (entry.isPlaying) Color(0xFF4CAF50) else Color(0xFFFFB74D),
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = entry.text,
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
     }
 }
 
