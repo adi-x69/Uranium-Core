@@ -211,29 +211,78 @@ fun WatchScreen(
             .build().apply { playWhenReady = false }
     }
 
-    // ---- Buffering sync (ExoPlayer/direct-URL mode only, not YouTube) ----
-    // When my player stalls, I broadcast that to the room so the other person
-    // auto-pauses instead of running ahead. When THEIR buffer entry appears, I
-    // pause locally (not pushed to the shared isPlaying state - just a local
-    // hold). When it clears, I resume and correct for whatever drift built up.
+    // ---- UI interaction state ----
+    var controlsVisible by remember { mutableStateOf(true) }
+    var interactionTick by remember { mutableStateOf(0) }
+    var isLandscape by remember { mutableStateOf(false) }
+    var isChatMode by remember { mutableStateOf(false) }
+    var isEmojiPickerOpen by remember { mutableStateOf(false) }
+
+    fun bumpInteraction() {
+        controlsVisible = true
+        interactionTick++
+    }
+
+    LaunchedEffect(interactionTick, isChatMode) {
+        if (isChatMode) return@LaunchedEffect // controls stay visible in chat mode
+        delay(3000)
+        controlsVisible = false
+    }
+
+    // ---- Server time offset for precision clock sync across devices ----
+    var serverTimeOffsetMs by remember { mutableStateOf(0L) }
+    DisposableEffect(Unit) {
+        val offsetRef = FirebaseDatabase.getInstance().getReference(".info/serverTimeOffset")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                serverTimeOffsetMs = snapshot.getValue(Long::class.java) ?: 0L
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        offsetRef.addValueEventListener(listener)
+        onDispose { offsetRef.removeEventListener(listener) }
+    }
+
+    fun currentServerTimeMs(): Long = System.currentTimeMillis() + serverTimeOffsetMs
+
+    fun calculateExpectedPosition(pos: Long, playing: Boolean, updatedAt: Long): Long {
+        if (!playing || updatedAt <= 0L) return pos
+        val nowServer = currentServerTimeMs()
+        val elapsed = (nowServer - updatedAt).coerceAtLeast(0L)
+        return pos + elapsed
+    }
+
+    // ---- Buffering & Sync State ----
     var localPlaybackState by remember { mutableStateOf(Player.STATE_IDLE) }
     var othersBuffering by remember { mutableStateOf<String?>(null) }
     var showSyncNowButton by remember { mutableStateOf(false) }
     var lastKnownPosition by remember { mutableStateOf(0L) }
-    var lastKnownPositionAtLocalMs by remember { mutableStateOf(0L) }
+    var lastUpdatedAtSnapshot by remember { mutableStateOf(0L) }
     val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
+
+    // Live position tracking for ExoPlayer (smooth UI slider & timestamps)
+    var exoCurrentPositionMs by remember { mutableStateOf(0L) }
+    var exoDurationMs by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(isPlayingState, isYouTubeMode, controlsVisible) {
+        if (isYouTubeMode) return@LaunchedEffect
+        while (true) {
+            exoCurrentPositionMs = exoPlayer.currentPosition
+            exoDurationMs = exoPlayer.duration.coerceAtLeast(0L)
+            delay(400)
+        }
+    }
 
     DisposableEffect(roomCode, uid) {
         if (uid.isNotEmpty()) bufferingRef.onDisconnect().removeValue()
         onDispose { bufferingRef.removeValue() }
     }
 
-    // Broadcast my own buffering state, debounced so a brief blip doesn't
-    // trigger a pause on the other side.
+    // Broadcast my own buffering state, debounced (800ms) so quick seek-loads don't flicker.
     LaunchedEffect(localPlaybackState, isYouTubeMode) {
         if (isYouTubeMode) return@LaunchedEffect
         if (localPlaybackState == Player.STATE_BUFFERING) {
-            delay(400)
+            delay(800)
             if (localPlaybackState == Player.STATE_BUFFERING) {
                 bufferingRef.setValue(
                     mapOf("username" to myUsername.ifEmpty { "Your friend" }, "at" to ServerValue.TIMESTAMP)
@@ -244,8 +293,7 @@ fun WatchScreen(
         }
     }
 
-    // Watch for the OTHER person's buffering entry (symmetric: works whether
-    // I'm host or just a viewer).
+    // Watch for other participants' buffering entry
     DisposableEffect(roomCode, uid) {
         val bufferingRootRef = db.child("buffering")
         val listener = object : ValueEventListener {
@@ -259,30 +307,53 @@ fun WatchScreen(
         onDispose { bufferingRootRef.removeEventListener(listener) }
     }
 
-    // React to the other person's buffering state changing.
-    LaunchedEffect(othersBuffering) {
+    // When this device finishes buffering, smoothly catch up if drifted.
+    LaunchedEffect(localPlaybackState) {
         if (isYouTubeMode) return@LaunchedEffect
-        if (othersBuffering != null) {
-            exoPlayer.playWhenReady = false
-        } else if (isPlayingState) {
-            // Recovered: estimate where playback should be now and correct.
-            val elapsed = System.currentTimeMillis() - lastKnownPositionAtLocalMs
-            val expectedPos = lastKnownPosition + elapsed
-            val drift = abs(exoPlayer.currentPosition - expectedPos)
-            if (drift > 4000L) {
-                showSyncNowButton = true
-            } else if (drift > 0L) {
-                exoPlayer.seekTo(expectedPos)
+        if (localPlaybackState == Player.STATE_READY && isPlayingState) {
+            val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+            val drift = abs(exoPlayer.currentPosition - expected)
+            if (drift in 2000L..6000L) {
+                exoPlayer.seekTo(expected)
                 showSyncNowButton = false
+            } else if (drift > 6000L) {
+                showSyncNowButton = true
             }
-            exoPlayer.playWhenReady = true
+        }
+    }
+
+    // Background drift monitor (checks every 4s, alerts or catches up without micro-stutter)
+    LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot) {
+        if (!isPlayingState) {
+            showSyncNowButton = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(4000)
+            if (!isPlayingState) break
+            if (localPlaybackState != Player.STATE_BUFFERING) {
+                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+                val current = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition
+                val drift = abs(current - expected)
+                if (drift > 5000L) {
+                    showSyncNowButton = true
+                } else {
+                    showSyncNowButton = false
+                }
+            }
         }
     }
 
     fun syncNow() {
-        val elapsed = System.currentTimeMillis() - lastKnownPositionAtLocalMs
-        exoPlayer.seekTo(lastKnownPosition + elapsed)
+        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+        if (isYouTubeMode) {
+            youtubePlayer?.seekTo(target / 1000f)
+            ytCurrentTimeMs = target
+        } else {
+            exoPlayer.seekTo(target)
+        }
         showSyncNowButton = false
+        bumpInteraction()
     }
 
     // ---- Network status icon: shows if EITHER person has a connection issue -
@@ -314,6 +385,9 @@ fun WatchScreen(
     val connectionIssue = hasNetworkIssue || videoBufferIssue
 
     fun pushPlaybackUpdate(playing: Boolean, positionMs: Long) {
+        lastKnownPosition = positionMs
+        lastUpdatedAtSnapshot = currentServerTimeMs()
+
         db.updateChildren(
             mapOf(
                 "isPlaying" to playing,
@@ -338,18 +412,18 @@ fun WatchScreen(
                 controlsUnlocked = snapshot.child("controlsUnlocked").getValue(Boolean::class.java) ?: false
 
                 val lastUpdatedBy = snapshot.child("lastUpdatedBy").getValue(String::class.java) ?: ""
-                // Only skip re-syncing play/pause/seek pings we just sent ourselves.
-                // Never skip the initial media load: this screen's player instances are
-                // brand new (not the same ones RoomScreen used) and haven't loaded
-                // anything yet even if we're the one who set the videoUrl.
                 val isSelfEcho = lastUpdatedBy == uid
 
                 val videoUrl = snapshot.child("videoUrl").getValue(String::class.java) ?: ""
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
                 val position = snapshot.child("position").getValue(Long::class.java) ?: 0L
-                isPlayingState = isPlaying
+                val lastUpdatedAt = snapshot.child("lastUpdatedAt").getValue(Long::class.java) ?: 0L
+
                 lastKnownPosition = position
-                lastKnownPositionAtLocalMs = System.currentTimeMillis()
+                lastUpdatedAtSnapshot = lastUpdatedAt
+                isPlayingState = isPlaying
+
+                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt)
 
                 isApplyingRemoteState = true
                 val ytId = getYoutubeVideoId(videoUrl)
@@ -357,10 +431,13 @@ fun WatchScreen(
                     isYouTubeMode = true
                     if (currentYtId != ytId) {
                         currentYtId = ytId
-                        if (isPlaying) youtubePlayer?.loadVideo(ytId, position / 1000f)
-                        else youtubePlayer?.cueVideo(ytId, position / 1000f)
+                        if (isPlaying) youtubePlayer?.loadVideo(ytId, targetPosition / 1000f)
+                        else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
                     } else if (!isSelfEcho) {
-                        if (abs(ytCurrentTimeMs - position) > 1500L) youtubePlayer?.seekTo(position / 1000f)
+                        if (abs(ytCurrentTimeMs - targetPosition) > 1500L) {
+                            youtubePlayer?.seekTo(targetPosition / 1000f)
+                            ytCurrentTimeMs = targetPosition
+                        }
                         if (isPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
                     }
                 } else if (videoUrl.isNotEmpty()) {
@@ -370,10 +447,14 @@ fun WatchScreen(
                         exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = isPlaying
-                        if (position > 0L) exoPlayer.seekTo(position)
+                        if (targetPosition > 0L) exoPlayer.seekTo(targetPosition)
                     } else if (!isSelfEcho) {
-                        if (exoPlayer.playWhenReady != isPlaying) exoPlayer.playWhenReady = isPlaying
-                        if (abs(exoPlayer.currentPosition - position) > 1500L) exoPlayer.seekTo(position)
+                        if (exoPlayer.playWhenReady != isPlaying) {
+                            exoPlayer.playWhenReady = isPlaying
+                        }
+                        if (abs(exoPlayer.currentPosition - targetPosition) > 1500L) {
+                            exoPlayer.seekTo(targetPosition)
+                        }
                     }
                 }
                 isApplyingRemoteState = false
@@ -388,11 +469,16 @@ fun WatchScreen(
         val playerListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 isPlayingState = isPlaying
-                if (isApplyingRemoteState || !canControl) return
-                pushPlaybackUpdate(isPlaying, exoPlayer.currentPosition)
+                // NOTE: Do not auto-push to Firebase here.
+                // Intentional user actions (Play/Pause/Seek/Skip) push directly.
+                // Auto-pushing here was triggering the buffer/seek pause feedback loop!
             }
             override fun onPlaybackStateChanged(state: Int) {
                 localPlaybackState = state
+                if (state == Player.STATE_ENDED && canControl) {
+                    isPlayingState = false
+                    pushPlaybackUpdate(false, exoPlayer.duration.coerceAtLeast(0L))
+                }
             }
         }
         exoPlayer.addListener(playerListener)
@@ -400,28 +486,6 @@ fun WatchScreen(
             exoPlayer.removeListener(playerListener)
             exoPlayer.release()
         }
-    }
-
-    // ---- UI interaction state ----
-    var controlsVisible by remember { mutableStateOf(true) }
-    var interactionTick by remember { mutableStateOf(0) }
-    var isLandscape by remember { mutableStateOf(false) }
-    var isChatMode by remember { mutableStateOf(false) }
-    var isEmojiPickerOpen by remember { mutableStateOf(false) }
-
-    fun bumpInteraction() {
-        controlsVisible = true
-        interactionTick++
-    }
-
-    LaunchedEffect(interactionTick, isChatMode) {
-        if (isChatMode) return@LaunchedEffect // controls stay visible in chat mode
-        delay(3000)
-        controlsVisible = false
-        // Emoji picker is intentionally NOT closed here - it stays open while
-        // browsing regardless of the controls-hide timer. It only closes when
-        // an emoji is picked, the video area is tapped, or its own close
-        // button is used.
     }
 
     fun applyOrientation(landscape: Boolean) {
@@ -660,20 +724,16 @@ fun WatchScreen(
                                     val playing = state == PlayerConstants.PlayerState.PLAYING
                                     if (state == PlayerConstants.PlayerState.PLAYING || state == PlayerConstants.PlayerState.PAUSED) {
                                         isPlayingState = playing
-                                        if (!isApplyingRemoteState && canControl) {
-                                            pushPlaybackUpdate(playing, ytCurrentTimeMs)
+                                    } else if (state == PlayerConstants.PlayerState.ENDED) {
+                                        isPlayingState = false
+                                        if (canControl) {
+                                            pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
                                         }
                                     }
                                 }
 
                                 override fun onCurrentSecond(youTubePlayer: YouTubePlayer, second: Float) {
-                                    val currentMs = (second * 1000).toLong()
-                                    if (!isApplyingRemoteState && canControl) {
-                                        if (abs(currentMs - ytCurrentTimeMs) > 1500L && ytCurrentTimeMs != 0L) {
-                                            pushPlaybackUpdate(isPlayingState, currentMs)
-                                        }
-                                    }
-                                    ytCurrentTimeMs = currentMs
+                                    ytCurrentTimeMs = (second * 1000).toLong()
                                 }
 
                                 override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
@@ -822,8 +882,8 @@ fun WatchScreen(
                     canControl = canControl,
                     controlsUnlocked = controlsUnlocked,
                     isPlaying = isPlayingState,
-                    currentMs = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition,
-                    durationMs = if (isYouTubeMode) ytDurationMs else exoPlayer.duration.coerceAtLeast(0L),
+                    currentMs = if (isYouTubeMode) ytCurrentTimeMs else exoCurrentPositionMs,
+                    durationMs = if (isYouTubeMode) ytDurationMs else exoDurationMs,
                     participants = participants,
                     myUid = uid,
                     onBack = onNavigateBack,

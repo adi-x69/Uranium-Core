@@ -41,7 +41,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                UraniumTvApp()
+                AppUpdateChecker {
+                    UraniumTvApp()
+                }
             }
         }
     }
