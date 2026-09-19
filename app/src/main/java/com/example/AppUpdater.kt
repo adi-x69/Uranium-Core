@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
@@ -61,8 +62,31 @@ sealed class DownloadState {
     data class Error(val message: String) : DownloadState()
 }
 
+// Firebase Realtime Database node that holds the latest-release info.
+// If you ever rename the node in the Firebase console, change it here too.
+private const val UPDATE_NODE = "appUpdate"
+private const val DB_URL = "https://uranium-tv-core-default-rtdb.firebaseio.com"
+
+// Safe readers: a wrong type typed into the console (e.g. "3" as text instead of the number 3)
+// must never crash the app - they just fall back to a default.
+private fun DataSnapshot.intOf(vararg keys: String): Int {
+    for (k in keys) {
+        val v = child(k).value?.toString()?.trim()?.toDoubleOrNull()
+        if (v != null) return v.toInt()
+    }
+    return 0
+}
+
+private fun DataSnapshot.textOf(vararg keys: String): String? {
+    for (k in keys) {
+        val v = child(k).value?.toString()
+        if (!v.isNullOrBlank()) return v
+    }
+    return null
+}
+
 /**
- * Checks Firebase `appUpdate` node for a newer version than current BuildConfig.VERSION_CODE.
+ * Checks the Firebase `appUpdate` node for a newer version than current BuildConfig.VERSION_CODE.
  * If found, displays a non-dismissible blocking update UI that downloads the APK and launches the installer.
  */
 @Composable
@@ -72,51 +96,48 @@ fun AppUpdateChecker(content: @Composable () -> Unit) {
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     val scope = rememberCoroutineScope()
 
-    // Listen to Firebase Realtime Database for appUpdate node
+    // Listen to Firebase Realtime Database for the update node.
+    // Any problem here (offline, permission denied, bad data) fails OPEN: the app just keeps working.
     DisposableEffect(Unit) {
-        val updateRef = FirebaseDatabase.getInstance().getReference("appUpdate")
+        val updateRef = try {
+            FirebaseDatabase.getInstance(DB_URL).getReference(UPDATE_NODE)
+        } catch (e: Throwable) {
+            null
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                if (!snapshot.exists()) {
-                    updateInfo = null
-                    return
-                }
-                val latestCode = (snapshot.child("latestVersionCode").getValue(Long::class.java)
-                    ?: snapshot.child("versionCode").getValue(Long::class.java)
-                    ?: snapshot.child("latestVersionCode").getValue(Int::class.java)?.toLong()
-                    ?: 0L).toInt()
+                try {
+                    if (!snapshot.exists()) {
+                        updateInfo = null
+                        return
+                    }
+                    val latestCode = snapshot.intOf("latestVersionCode", "versionCode")
+                    val latestName = snapshot.textOf("latestVersionName", "versionName") ?: ""
+                    val apkUrl = snapshot.textOf("apkUrl", "url") ?: ""
+                    val releaseNotes = snapshot.textOf("releaseNotes", "notes")
+                        ?: "Performance improvements and bug fixes."
+                    val force = (snapshot.child("forceUpdate").value as? Boolean) ?: true
 
-                val latestName = snapshot.child("latestVersionName").getValue(String::class.java)
-                    ?: snapshot.child("versionName").getValue(String::class.java)
-                    ?: ""
-
-                val apkUrl = snapshot.child("apkUrl").getValue(String::class.java)
-                    ?: snapshot.child("url").getValue(String::class.java)
-                    ?: ""
-
-                val releaseNotes = snapshot.child("releaseNotes").getValue(String::class.java)
-                    ?: snapshot.child("notes").getValue(String::class.java)
-                    ?: "Performance improvements and bug fixes."
-
-                val force = snapshot.child("forceUpdate").getValue(Boolean::class.java) ?: true
-
-                if (latestCode > BuildConfig.VERSION_CODE && apkUrl.isNotBlank()) {
-                    updateInfo = AppUpdateInfo(
-                        latestVersionCode = latestCode,
-                        latestVersionName = latestName.ifEmpty { "v$latestCode" },
-                        apkUrl = apkUrl,
-                        releaseNotes = releaseNotes,
-                        forceUpdate = force
-                    )
-                } else {
+                    updateInfo = if (latestCode > BuildConfig.VERSION_CODE && apkUrl.isNotBlank()) {
+                        AppUpdateInfo(
+                            latestVersionCode = latestCode,
+                            latestVersionName = latestName.ifEmpty { "v$latestCode" },
+                            apkUrl = apkUrl,
+                            releaseNotes = releaseNotes,
+                            forceUpdate = force
+                        )
+                    } else {
+                        null
+                    }
+                } catch (e: Throwable) {
                     updateInfo = null
                 }
             }
 
             override fun onCancelled(error: DatabaseError) {}
         }
-        updateRef.addValueEventListener(listener)
-        onDispose { updateRef.removeEventListener(listener) }
+        updateRef?.addValueEventListener(listener)
+        onDispose { updateRef?.removeEventListener(listener) }
     }
 
     fun startDownload(url: String) {
@@ -179,6 +200,29 @@ fun AppUpdateChecker(content: @Composable () -> Unit) {
                                 }
                             }
                         }
+                    }
+
+                    // Sanity checks so a bad upload gives a clear message instead of a vague installer error
+                    if (totalBytes > 0 && outputFile.length() != totalBytes) {
+                        outputFile.delete()
+                        downloadState = DownloadState.Error("Download was incomplete. Please retry.")
+                        return@withContext
+                    }
+                    val archiveInfo = context.packageManager.getPackageArchiveInfo(outputFile.absolutePath, 0)
+                    if (archiveInfo == null) {
+                        outputFile.delete()
+                        downloadState = DownloadState.Error("The downloaded file is not a valid APK. Check apkUrl in Firebase.")
+                        return@withContext
+                    }
+                    if (archiveInfo.packageName != context.packageName) {
+                        outputFile.delete()
+                        downloadState = DownloadState.Error("The downloaded APK is for a different app.")
+                        return@withContext
+                    }
+                    if (PackageInfoCompat.getLongVersionCode(archiveInfo) <= BuildConfig.VERSION_CODE.toLong()) {
+                        outputFile.delete()
+                        downloadState = DownloadState.Error("The uploaded APK is not newer than this app. Raise versionCode in app/build.gradle.kts and rebuild.")
+                        return@withContext
                     }
 
                     downloadState = DownloadState.ReadyToInstall(outputFile)
