@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,8 +25,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,16 +37,29 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.bouncyClick
 
 /**
- * A simple preset avatar: an id (persisted per-user), an emoji glyph, and a background color.
- * No image assets are required since the emoji is drawn directly.
+ * A preset avatar: an id (persisted per-user), an optional drawable resource (for custom Marvel avatars),
+ * or an emoji glyph fallback, and a background/glow color.
  */
 data class Avatar(
     val id: String,
-    val emoji: String,
-    val color: Color
+    val emoji: String = "⚡",
+    val color: Color = Color(0xFFEF5350),
+    val drawableRes: Int? = null,
+    val name: String = ""
 )
 
-val PRESET_AVATARS: List<Avatar> = listOf(
+val MARVEL_AVATARS: List<Avatar> = listOf(
+    Avatar("iron_man", "🤖", Color(0xFFD32F2F), R.drawable.iron_man, "Iron Man"),
+    Avatar("spiderman", "🕷️", Color(0xFFE53935), R.drawable.spiderman, "Spider-Man"),
+    Avatar("deadpool", "⚔️", Color(0xFFC62828), R.drawable.deadpool, "Deadpool"),
+    Avatar("wolverine", "🐺", Color(0xFFFBC02D), R.drawable.wolverine, "Wolverine"),
+    Avatar("hulk", "💪", Color(0xFF388E3C), R.drawable.hulk, "Hulk"),
+    Avatar("she_hulk", "⚖️", Color(0xFF43A047), R.drawable.she_hulk, "She-Hulk"),
+    Avatar("groot", "🌳", Color(0xFF6D4C41), R.drawable.groot, "Groot"),
+    Avatar("wanda", "🔮", Color(0xFF8E24AA), R.drawable.wanda, "Scarlet Witch")
+)
+
+val PRESET_AVATARS: List<Avatar> = MARVEL_AVATARS + listOf(
     Avatar("avatar_1", "🦄", Color(0xFF7C4DFF)),
     Avatar("avatar_2", "🐱", Color(0xFFFF7043)),
     Avatar("avatar_3", "🐶", Color(0xFF26A69A)),
@@ -112,23 +130,40 @@ fun AvatarCircle(
             modifier = modifier
                 .size(size)
                 .background(color = avatar.color, shape = CircleShape)
+                .clip(CircleShape)
                 .then(
                     if (selected) {
-                        Modifier.border(
-                            width = 3.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = CircleShape
-                        )
+                        Modifier
+                            .border(
+                                width = 3.5.dp,
+                                color = Color(0xFF00F5FF),
+                                shape = CircleShape
+                            )
+                            .padding(1.dp)
+                            .border(
+                                width = 1.5.dp,
+                                color = Color.White,
+                                shape = CircleShape
+                            )
                     } else {
                         Modifier
                     }
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = avatar.emoji,
-                fontSize = (size.value / 2).sp
-            )
+            if (avatar.drawableRes != null) {
+                Image(
+                    painter = painterResource(avatar.drawableRes),
+                    contentDescription = avatar.name.ifEmpty { avatar.id },
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = avatar.emoji,
+                    fontSize = (size.value / 2).sp
+                )
+            }
         }
     }
 }
