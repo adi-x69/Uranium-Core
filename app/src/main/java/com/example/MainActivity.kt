@@ -44,6 +44,7 @@ import androidx.navigation.navArgument
 import com.example.ui.theme.bouncyClick
 import com.example.ui.theme.MyApplicationTheme
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,9 +131,9 @@ fun UraniumTvApp() {
         composable("signup") {
             SignupScreen(
                 onNavigateToLogin = { navController.popBackStack() },
-                onSignup = { name, username, password, avatarId ->
-                    if (name.isBlank() || username.isBlank() || password.isBlank()) {
-                        Toast.makeText(context, "Please enter your name, username and password", Toast.LENGTH_SHORT).show()
+                onSignup = { name, username, email, password, avatarId ->
+                    if (name.isBlank() || username.isBlank() || email.isBlank() || password.isBlank()) {
+                        Toast.makeText(context, "Please fill in all fields", Toast.LENGTH_SHORT).show()
                         return@SignupScreen
                     }
                     if (password.length < 6) {
@@ -141,8 +142,9 @@ fun UraniumTvApp() {
                     }
                     val cleanName = name.trim()
                     val cleanUsername = username.trim().lowercase()
-                    val email = "$cleanUsername@uraniumtv.local"
-                    auth.createUserWithEmailAndPassword(email, password)
+                    val cleanEmail = email.trim().lowercase()
+                    val authEmail = "$cleanUsername@uraniumtv.local"
+                    auth.createUserWithEmailAndPassword(authEmail, password)
                         .addOnCompleteListener { task ->
                             if (task.isSuccessful) {
                                 val uid = auth.currentUser?.uid ?: ""
@@ -152,9 +154,12 @@ fun UraniumTvApp() {
                                 val profileUpdates = mapOf(
                                     "users/$uid/name" to cleanName,
                                     "users/$uid/username" to cleanUsername,
+                                    "users/$uid/email" to cleanEmail,
+                                    "users/$uid/emailVerified" to true,
                                     "users/$uid/avatarId" to avatarId,
                                     "users/$uid/password" to password,
-                                    "usernames/$cleanUsername" to uid
+                                    "usernames/$cleanUsername" to uid,
+                                    "emails/${sanitizeEmailKey(cleanEmail)}" to uid
                                 )
                                 db.updateChildren(profileUpdates)
                                     .addOnCompleteListener { dbTask ->
@@ -489,14 +494,170 @@ fun BrightAvatarGlowRing(
 @Composable
 fun SignupScreen(
     onNavigateToLogin: () -> Unit,
-    onSignup: (String, String, String, String) -> Unit
+    onSignup: (String, String, String, String, String) -> Unit // name, username, email, password, avatarId
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val db = remember {
+        com.google.firebase.database.FirebaseDatabase
+            .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+            .reference
+    }
+
     var name by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var selectedAvatarId by remember { mutableStateOf(MARVEL_AVATARS[0].id) }
+
+    // Step 2: collect + verify email. Kept as a separate simple step rather
+    // than squeezed into the artwork above, since sign_up.png only has 4
+    // input-box slots baked into it.
+    var showEmailStep by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf("") }
+    var otpInput by remember { mutableStateOf("") }
+    var generatedOtp by remember { mutableStateOf("") }
+    var otpGeneratedAt by remember { mutableStateOf(0L) }
+    var otpSent by remember { mutableStateOf(false) }
+    var isSendingOtp by remember { mutableStateOf(false) }
+    var isVerifying by remember { mutableStateOf(false) }
+    val otpValidityMs = 5 * 60 * 1000L
+
+    fun requestOtp() {
+        val cleanEmail = email.trim().lowercase()
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
+            Toast.makeText(context, "Enter a valid email address", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isSendingOtp = true
+        db.child("emails").child(sanitizeEmailKey(cleanEmail)).get()
+            .addOnSuccessListener { snap ->
+                if (snap.exists()) {
+                    isSendingOtp = false
+                    Toast.makeText(context, "This email is already registered", Toast.LENGTH_SHORT).show()
+                    return@addOnSuccessListener
+                }
+                val code = generateOtpCode()
+                coroutineScope.launch {
+                    val sent = sendOtpEmail(cleanEmail, code)
+                    isSendingOtp = false
+                    if (sent) {
+                        generatedOtp = code
+                        otpGeneratedAt = System.currentTimeMillis()
+                        otpInput = ""
+                        otpSent = true
+                        Toast.makeText(context, "Code sent to $cleanEmail", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Couldn't send the code - check your connection and try again", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .addOnFailureListener {
+                isSendingOtp = false
+                Toast.makeText(context, "Couldn't verify email availability, try again", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    fun verifyOtp() {
+        if (System.currentTimeMillis() - otpGeneratedAt > otpValidityMs) {
+            Toast.makeText(context, "Code expired - resend and try again", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (otpInput.trim() != generatedOtp) {
+            Toast.makeText(context, "Incorrect code", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isVerifying = true
+        onSignup(name, username, email.trim().lowercase(), password, selectedAvatarId)
+    }
+
+    if (showEmailStep) {
+        Scaffold { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0A0A0F))
+                    .padding(innerPadding)
+                    .imePadding()
+                    .padding(horizontal = 32.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (otpSent) "Verify Your Email" else "One Last Step",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = Color(0xFFFF5A5A),
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+
+                if (!otpSent) {
+                    Text(
+                        text = "Enter your email - we'll send a 6-digit code to verify it's yours.",
+                        color = Color(0xFF8A8F9E),
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+                    )
+
+                    Button(
+                        onClick = { requestOtp() },
+                        enabled = !isSendingOtp,
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        Text(if (isSendingOtp) "Sending code…" else "Send OTP")
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    TextButton(onClick = { showEmailStep = false }) {
+                        Text("Back", color = Color(0xFF8A8F9E))
+                    }
+                } else {
+                    Text(
+                        text = "Enter the 6-digit code sent to ${email.trim().lowercase()}",
+                        color = Color(0xFF8A8F9E),
+                        modifier = Modifier.padding(bottom = 24.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = otpInput,
+                        onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) otpInput = it },
+                        label = { Text("6-digit code") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+                    )
+
+                    Button(
+                        onClick = { verifyOtp() },
+                        enabled = !isVerifying && otpInput.length == 6,
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        Text(if (isVerifying) "Creating account…" else "Verify & Create Account")
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    TextButton(onClick = { requestOtp() }, enabled = !isSendingOtp) {
+                        Text(if (isSendingOtp) "Resending…" else "Resend code", color = Color(0xFF8A8F9E))
+                    }
+                    TextButton(onClick = { otpSent = false }) {
+                        Text("Change email", color = Color(0xFF8A8F9E))
+                    }
+                }
+            }
+        }
+        return
+    }
 
     Scaffold { innerPadding ->
         Box(
@@ -664,7 +825,11 @@ fun SignupScreen(
                                     Toast.makeText(context, "Passwords don't match", Toast.LENGTH_SHORT).show()
                                     return@bouncyClick
                                 }
-                                onSignup(name.trim(), username.trim(), password, selectedAvatarId)
+                                if (password.length < 6) {
+                                    Toast.makeText(context, "Password must be at least 6 characters", Toast.LENGTH_SHORT).show()
+                                    return@bouncyClick
+                                }
+                                showEmailStep = true
                             }
                     )
 
