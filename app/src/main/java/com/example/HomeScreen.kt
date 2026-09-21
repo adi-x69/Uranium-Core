@@ -49,12 +49,14 @@ import com.google.firebase.database.ValueEventListener
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.foundation.Canvas
 import kotlin.math.sin
@@ -80,18 +82,22 @@ fun HomeScreen(
     var invites by remember { mutableStateOf<List<WatchInvite>>(emptyList()) }
     var continueWatching by remember { mutableStateOf<List<ContinueWatchingEntry>>(emptyList()) }
     var onlineFriends by remember { mutableStateOf<List<FriendProfile>>(emptyList()) }
-    var myAvatarId by remember { mutableStateOf(PRESET_AVATARS[0].id) }
-
-    val db = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference }
     val auth = remember { FirebaseAuth.getInstance() }
     val uid = auth.currentUser?.uid ?: ""
+    val cachedAvatar = remember(uid) { UserProfileStorage.getCachedAvatar(context, uid) }
+    var myAvatarId by remember(uid) { mutableStateOf(cachedAvatar) }
+
+    val db = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference }
 
     // So the profile button in the top bar shows this user's own avatar.
     DisposableEffect(uid) {
         val avatarRef = db.child("users").child(uid).child("avatarId")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                myAvatarId = snapshot.getValue(String::class.java) ?: PRESET_AVATARS[0].id
+                val raw = snapshot.getValue(String::class.java)
+                val clean = if (raw.isNullOrBlank() || raw.startsWith("avatar_")) "iron_man" else raw.trim()
+                myAvatarId = clean
+                UserProfileStorage.saveAvatarLocally(context, uid, clean)
             }
             override fun onCancelled(error: DatabaseError) {}
         }
@@ -374,6 +380,9 @@ private fun ReactorHomeHero(
             modifier = Modifier.fillMaxSize()
         )
 
+        // Sweeping cyber laser scanner beam across the reactor deck
+        FuturisticScannerOverlay()
+
         // Continuous breathing animation for primary action buttons and glow
         val infiniteTransition = rememberInfiniteTransition(label = "heroBreathing")
         
@@ -418,16 +427,17 @@ private fun ReactorHomeHero(
             isReversed = true
         )
 
-        // Profile avatar, sitting where the radioactive icon panel is in the artwork.
-        Box(
-            modifier = Modifier
-                .offset(x = w * 0.728f, y = h * 0.072f)
-                .size(w * 0.150f, h * 0.066f)
-                .bouncyClick(onClick = onNavigateToProfile),
-            contentAlignment = Alignment.Center
-        ) {
-            AvatarCircle(avatar = avatarById(myAvatarId), size = w * 0.11f)
-        }
+        // Profile avatar inside the metal box with rotating and blinking circular ring
+        val avatarContainerSize = w * 0.138f
+        RotatingBlinkingAvatar(
+            avatarId = myAvatarId,
+            size = avatarContainerSize,
+            onClick = onNavigateToProfile,
+            modifier = Modifier.offset(
+                x = w * 0.7832f - (avatarContainerSize / 2),
+                y = h * 0.1128f - (avatarContainerSize / 2)
+            )
+        )
 
         // Continuous breathing animation for primary action buttons
         val pulseScale by infiniteTransition.animateFloat(
@@ -464,10 +474,12 @@ private fun ReactorHomeHero(
                 .bouncyClick { if (!busy) onCreateRoom() }
         )
 
+        val panelW = w * 0.5210f
+        val panelH = h * 0.0913f
         Box(
             modifier = Modifier
                 .offset(x = w * 0.2383f, y = h * 0.6242f)
-                .size(w * 0.5210f, h * 0.0913f)
+                .size(panelW, panelH)
         ) {
             Image(
                 painter = painterResource(R.drawable.room_code_panel),
@@ -475,23 +487,29 @@ private fun ReactorHomeHero(
                 contentScale = ContentScale.FillBounds,
                 modifier = Modifier.fillMaxSize()
             )
-            BasicTextField(
-                value = joinRoomCode,
-                onValueChange = onJoinRoomCodeChange,
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = Color(0xFFFFC7C7),
-                    fontSize = 18.sp,
-                    textAlign = TextAlign.Center,
-                    letterSpacing = 4.sp
-                ),
-                cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+            // Perfectly centered inside the dark input slot of room_code_panel
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth(0.88f)
-                    .fillMaxHeight(0.42f)
-                    .padding(bottom = h * 0.01f)
-            )
+                    .height(panelH * 0.36f)
+                    .align(Alignment.TopCenter)
+                    .offset(y = panelH * 0.43f),
+                contentAlignment = Alignment.Center
+            ) {
+                BasicTextField(
+                    value = joinRoomCode,
+                    onValueChange = onJoinRoomCodeChange,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color(0xFFFFC7C7),
+                        fontSize = 18.sp,
+                        textAlign = TextAlign.Center,
+                        letterSpacing = 4.sp
+                    ),
+                    cursorBrush = SolidColor(Color(0xFFFF5A5A)),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
 
         Image(
@@ -524,12 +542,25 @@ private fun ReactorHomeHero(
 @Composable
 private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) {
     Column(modifier = Modifier.padding(top = 16.dp)) {
-        Text(
-            "Online now",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
-        )
+        Row(
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(NeonToxicGreen, CircleShape)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "FRIENDS ONLINE",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                letterSpacing = 1.2.sp
+            )
+        }
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -537,9 +568,14 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
             items(friends, key = { it.uid }) { friend ->
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.width(64.dp)
+                    modifier = Modifier.width(68.dp)
                 ) {
-                    Box(modifier = Modifier.bouncyClick { onClick() }) {
+                    Box(
+                        modifier = Modifier
+                            .bouncyClick { onClick() }
+                            .border(1.5.dp, NeonCyberCyan.copy(alpha = 0.6f), CircleShape)
+                            .padding(2.dp)
+                    ) {
                         AvatarCircle(avatar = avatarById(friend.avatarId), size = 52.dp)
                         Box(
                             modifier = Modifier
@@ -547,16 +583,19 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
                                 .size(14.dp)
                                 .background(
                                     color = if (friend.presenceStatus == "watching")
-                                        com.example.ui.theme.SeenBlue else com.example.ui.theme.OnlineGreen,
+                                        NeonCyberCyan else NeonToxicGreen,
                                     shape = CircleShape
                                 )
-                                .border(2.dp, MaterialTheme.colorScheme.background, CircleShape)
+                                .border(2.dp, Color(0xFF0D1019), CircleShape)
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         friend.username,
-                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         maxLines = 1
                     )
                 }
@@ -568,59 +607,76 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
 @Composable
 private fun ContinueWatchingRow(entries: List<ContinueWatchingEntry>, onResume: (ContinueWatchingEntry) -> Unit) {
     Column(modifier = Modifier.padding(top = 20.dp)) {
-        Text(
-            "Continue Watching",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
-        )
+        Row(
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(NeonHazardAmber, CircleShape)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "CONTINUE WATCHING",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                letterSpacing = 1.2.sp
+            )
+        }
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(entries, key = { it.roomCode }) { entry ->
-                Card(
+                FuturisticGlassCard(
                     modifier = Modifier
-                        .width(180.dp)
-                        .clip(RoundedCornerShape(com.example.ui.theme.UraniumShapes.cardRadius.dp)),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        .width(190.dp)
+                        .bouncyClick { onResume(entry) },
+                    borderColors = listOf(NeonCrimson.copy(alpha = 0.7f), NeonCyberCyan.copy(alpha = 0.7f))
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(com.example.ui.theme.UraniumShapes.cardRadius.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .then(Modifier)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(90.dp)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                                .height(80.dp)
+                                .background(Color(0xFF080B14)),
                             contentAlignment = Alignment.Center
                         ) {
-                            IconButton(
-                                onClick = { onResume(entry) },
-                                modifier = Modifier.bouncyClick { onResume(entry) }
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .background(Color(0x33FF1744), CircleShape)
+                                    .border(1.5.dp, NeonCrimson, CircleShape),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.PlayArrow,
                                     contentDescription = "Resume",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(36.dp)
+                                    tint = NeonCrimson,
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                "Room ${entry.roomCode}",
-                                style = MaterialTheme.typography.titleMedium,
+                                "ROOM: ${entry.roomCode}",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                 maxLines = 1
                             )
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                if (entry.isYouTube) "YouTube \u00b7 resume" else "Resume where you left off",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray
+                                if (entry.isYouTube) "YOUTUBE" else "WEB VIDEO",
+                                fontSize = 10.sp,
+                                color = NeonCyberCyan,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                             )
                         }
                     }
@@ -726,5 +782,143 @@ private fun AnimatedWaveform(modifier: Modifier = Modifier, isReversed: Boolean 
                 alpha = 0.8f
             )
         }
+    }
+}
+
+@Composable
+private fun RotatingBlinkingAvatar(
+    avatarId: String,
+    size: androidx.compose.ui.unit.Dp,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "avatarRingAnim")
+
+    // Smooth continuous 360-degree rotation
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ringRotation"
+    )
+
+    // Pulsing/blinking glow effect
+    val blinkAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ringBlinkAlpha"
+    )
+
+    // Counter-rotation for micro HUD elements
+    val counterRotation by infiniteTransition.animateFloat(
+        initialValue = 360f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 5500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "counterRotation"
+    )
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .bouncyClick(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        // Rotating tactical HUD circular rings with blinking pulse
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokeWidth = 2.dp.toPx()
+            val ringRadius = (this.size.minDimension / 2f) - (strokeWidth + 2.dp.toPx())
+
+            // Outer soft ambient glow ring
+            drawCircle(
+                color = NeonCrimson.copy(alpha = blinkAlpha * 0.35f),
+                radius = ringRadius + 2.5.dp.toPx(),
+                style = Stroke(width = 3.dp.toPx())
+            )
+
+            // Primary segmented high-tech rotating ring (glowing & blinking)
+            rotate(rotation) {
+                // Arc segment 1 (Crimson to Amber gradient)
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        listOf(NeonCrimson, NeonHazardAmber, NeonCrimson)
+                    ),
+                    startAngle = 10f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = Offset(center.x - ringRadius, center.y - ringRadius),
+                    size = Size(ringRadius * 2, ringRadius * 2),
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                    alpha = blinkAlpha
+                )
+
+                // Arc segment 2 (Cyber Cyan to Crimson gradient)
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        listOf(NeonCyberCyan, NeonCrimson, NeonCyberCyan)
+                    ),
+                    startAngle = 190f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = Offset(center.x - ringRadius, center.y - ringRadius),
+                    size = Size(ringRadius * 2, ringRadius * 2),
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                    alpha = blinkAlpha
+                )
+
+                // Tactical radar dots on ring perimeter
+                val tickRadius = ringRadius - 3.dp.toPx()
+                for (angle in listOf(45f, 135f, 225f, 315f)) {
+                    val rad = Math.toRadians(angle.toDouble())
+                    val dotCenter = Offset(
+                        (center.x + tickRadius * Math.cos(rad)).toFloat(),
+                        (center.y + tickRadius * Math.sin(rad)).toFloat()
+                    )
+                    drawCircle(
+                        color = NeonCyberCyan.copy(alpha = blinkAlpha),
+                        radius = 1.6.dp.toPx(),
+                        center = dotCenter
+                    )
+                }
+            }
+
+            // Counter-rotating inner micro-accent arcs
+            rotate(counterRotation) {
+                val innerRadius = ringRadius - 4.dp.toPx()
+                drawArc(
+                    color = NeonHazardAmber.copy(alpha = (1.2f - blinkAlpha).coerceIn(0.2f, 0.9f)),
+                    startAngle = 60f,
+                    sweepAngle = 40f,
+                    useCenter = false,
+                    topLeft = Offset(center.x - innerRadius, center.y - innerRadius),
+                    size = Size(innerRadius * 2, innerRadius * 2),
+                    style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = NeonHazardAmber.copy(alpha = (1.2f - blinkAlpha).coerceIn(0.2f, 0.9f)),
+                    startAngle = 240f,
+                    sweepAngle = 40f,
+                    useCenter = false,
+                    topLeft = Offset(center.x - innerRadius, center.y - innerRadius),
+                    size = Size(innerRadius * 2, innerRadius * 2),
+                    style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                )
+            }
+        }
+
+        // The Profile Avatar neatly centered inside the metal socket & rotating ring
+        AvatarCircle(
+            avatar = avatarById(avatarId),
+            size = size * 0.72f
+        )
     }
 }

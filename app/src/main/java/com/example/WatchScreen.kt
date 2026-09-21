@@ -134,15 +134,22 @@ fun WatchScreen(
     val db = remember(roomCode) { watchDbRef(roomCode) }
     val usersRef = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference.child("users") }
 
-    var myUsername by remember { mutableStateOf("") }
-    var myAvatarId by remember { mutableStateOf("") }
+    var myUsername by remember { mutableStateOf(UserProfileStorage.getCachedUsername(context, uid).ifEmpty { "someone" }) }
+    var myAvatarId by remember { mutableStateOf(UserProfileStorage.getCachedAvatar(context, uid)) }
     LaunchedEffect(uid) {
+        if (uid.isEmpty()) return@LaunchedEffect
         val userRef = FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
             .reference.child("users").child(uid)
         userRef.child("username").get()
-            .addOnSuccessListener { myUsername = it.getValue(String::class.java) ?: "someone" }
+            .addOnSuccessListener { 
+                val name = it.getValue(String::class.java)
+                if (!name.isNullOrBlank()) myUsername = name
+            }
         userRef.child("avatarId").get()
-            .addOnSuccessListener { myAvatarId = it.getValue(String::class.java) ?: "avatar_1" }
+            .addOnSuccessListener { 
+                val av = it.getValue(String::class.java)
+                if (!av.isNullOrBlank()) myAvatarId = av
+            }
     }
 
     // ---- Presence: mark this user as "in the room" so others see a join banner +
@@ -155,7 +162,7 @@ fun WatchScreen(
     }
     LaunchedEffect(roomCode, uid, myUsername, myAvatarId) {
         if (uid.isNotEmpty() && myUsername.isNotEmpty()) {
-            participantRef.setValue(mapOf("username" to myUsername, "avatarId" to myAvatarId.ifEmpty { "avatar_1" }))
+            participantRef.setValue(mapOf("username" to myUsername, "avatarId" to myAvatarId.ifEmpty { "iron_man" }))
         }
     }
 
@@ -169,7 +176,7 @@ fun WatchScreen(
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
                 val pid = snapshot.key ?: return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
-                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "avatar_1"
+                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "iron_man"
                 participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
                 if (pid != uid) {
                     joinLeaveBanners.add(BannerEntry("join-$pid-${System.nanoTime()}", "$username joined"))
@@ -178,7 +185,7 @@ fun WatchScreen(
             override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {
                 val pid = snapshot.key ?: return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
-                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "avatar_1"
+                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "iron_man"
                 participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
             }
             override fun onChildRemoved(snapshot: DataSnapshot) {
@@ -202,17 +209,25 @@ fun WatchScreen(
     var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
     var ytCurrentTimeMs by remember { mutableStateOf(0L) }
     var ytDurationMs by remember { mutableStateOf(0L) }
+    var isYtBuffering by remember { mutableStateOf(false) }
     var isPlayingState by remember { mutableStateOf(false) }
     var isApplyingRemoteState by remember { mutableStateOf(false) }
     var hostUid by remember { mutableStateOf("") }
     var controlsUnlocked by remember { mutableStateOf(false) }
-    val canControl = uid.isNotEmpty() && (uid == hostUid || controlsUnlocked)
+    val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
+    var isUserSeeking by remember { mutableStateOf(false) }
 
     val exoPlayer = remember {
         val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(mapOf("Referer" to AppConfig.VIDEO_REFERER))
+        val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
+            .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+            .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+            .build()
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setAudioAttributes(audioAttributes, true)
             .build().apply { playWhenReady = false }
     }
 
@@ -238,7 +253,8 @@ fun WatchScreen(
     // ---- Server time offset for precision clock sync across devices ----
     var serverTimeOffsetMs by remember { mutableStateOf(0L) }
     DisposableEffect(Unit) {
-        val offsetRef = FirebaseDatabase.getInstance().getReference(".info/serverTimeOffset")
+        val offsetRef = FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+            .getReference(".info/serverTimeOffset")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 serverTimeOffsetMs = snapshot.getValue(Long::class.java) ?: 0L
@@ -251,11 +267,12 @@ fun WatchScreen(
 
     fun currentServerTimeMs(): Long = System.currentTimeMillis() + serverTimeOffsetMs
 
-    fun calculateExpectedPosition(pos: Long, playing: Boolean, updatedAt: Long): Long {
+    fun calculateExpectedPosition(pos: Long, playing: Boolean, updatedAt: Long, duration: Long = 0L): Long {
         if (!playing || updatedAt <= 0L) return pos
         val nowServer = currentServerTimeMs()
         val elapsed = (nowServer - updatedAt).coerceAtLeast(0L)
-        return pos + elapsed
+        val result = pos + elapsed
+        return if (duration > 0L) result.coerceIn(0L, duration) else result.coerceAtLeast(0L)
     }
 
     // ---- Buffering & Sync State ----
@@ -270,12 +287,12 @@ fun WatchScreen(
     var exoCurrentPositionMs by remember { mutableStateOf(0L) }
     var exoDurationMs by remember { mutableStateOf(0L) }
 
-    LaunchedEffect(isPlayingState, isYouTubeMode, controlsVisible) {
+    LaunchedEffect(isYouTubeMode) {
         if (isYouTubeMode) return@LaunchedEffect
         while (true) {
             exoCurrentPositionMs = exoPlayer.currentPosition
             exoDurationMs = exoPlayer.duration.coerceAtLeast(0L)
-            delay(400)
+            delay(300)
         }
     }
 
@@ -285,11 +302,11 @@ fun WatchScreen(
     }
 
     // Broadcast my own buffering state, debounced (800ms) so quick seek-loads don't flicker.
-    LaunchedEffect(localPlaybackState, isYouTubeMode) {
-        if (isYouTubeMode) return@LaunchedEffect
-        if (localPlaybackState == Player.STATE_BUFFERING) {
+    val isLocalBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
+    LaunchedEffect(isLocalBuffering) {
+        if (isLocalBuffering) {
             delay(800)
-            if (localPlaybackState == Player.STATE_BUFFERING) {
+            if (isLocalBuffering) {
                 bufferingRef.setValue(
                     mapOf("username" to myUsername.ifEmpty { "Your friend" }, "at" to ServerValue.TIMESTAMP)
                 )
@@ -316,32 +333,44 @@ fun WatchScreen(
     // When this device finishes buffering, smoothly catch up if drifted.
     LaunchedEffect(localPlaybackState) {
         if (isYouTubeMode) return@LaunchedEffect
-        if (localPlaybackState == Player.STATE_READY && isPlayingState) {
-            val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+        if (localPlaybackState == Player.STATE_READY && isPlayingState && !isUserSeeking) {
+            val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, exoDurationMs)
             val drift = abs(exoPlayer.currentPosition - expected)
-            if (drift in 2000L..6000L) {
+            if (drift in 1500L..5000L) {
                 exoPlayer.seekTo(expected)
                 showSyncNowButton = false
-            } else if (drift > 6000L) {
+            } else if (drift > 5000L) {
                 showSyncNowButton = true
+            } else {
+                showSyncNowButton = false
             }
         }
     }
 
-    // Background drift monitor (checks every 4s, alerts or catches up without micro-stutter)
-    LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot) {
-        if (!isPlayingState) {
+    // Background drift monitor (checks every 3s, auto-catches up without micro-stutter)
+    LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
+        if (!isPlayingState || isUserSeeking) {
             showSyncNowButton = false
             return@LaunchedEffect
         }
         while (true) {
-            delay(4000)
-            if (!isPlayingState) break
-            if (localPlaybackState != Player.STATE_BUFFERING) {
-                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+            delay(3000)
+            if (!isPlayingState || isUserSeeking) break
+            val isBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
+            if (!isBuffering) {
+                val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
+                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
                 val current = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition
                 val drift = abs(current - expected)
-                if (drift > 5000L) {
+                if (drift in 1500L..5000L) {
+                    if (isYouTubeMode) {
+                        youtubePlayer?.seekTo(expected / 1000f)
+                        ytCurrentTimeMs = expected
+                    } else {
+                        exoPlayer.seekTo(expected)
+                    }
+                    showSyncNowButton = false
+                } else if (drift > 5000L) {
                     showSyncNowButton = true
                 } else {
                     showSyncNowButton = false
@@ -351,7 +380,8 @@ fun WatchScreen(
     }
 
     fun syncNow() {
-        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot)
+        val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
+        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
         if (isYouTubeMode) {
             youtubePlayer?.seekTo(target / 1000f)
             ytCurrentTimeMs = target
@@ -387,7 +417,7 @@ fun WatchScreen(
         hasNetworkIssue = !isValidated(connectivityManager.activeNetwork)
         onDispose { connectivityManager.unregisterNetworkCallback(callback) }
     }
-    val videoBufferIssue = !isYouTubeMode && (localPlaybackState == Player.STATE_BUFFERING || othersBuffering != null)
+    val videoBufferIssue = isLocalBuffering || othersBuffering != null
     val connectionIssue = hasNetworkIssue || videoBufferIssue
 
     fun pushPlaybackUpdate(playing: Boolean, positionMs: Long) {
@@ -437,7 +467,7 @@ fun WatchScreen(
                 lastUpdatedAtSnapshot = lastUpdatedAt
                 isPlayingState = isPlaying
 
-                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt)
+                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, if (isYouTubeMode) ytDurationMs else exoDurationMs)
 
                 isApplyingRemoteState = true
                 val ytId = getYoutubeVideoId(videoUrl)
@@ -445,10 +475,11 @@ fun WatchScreen(
                     isYouTubeMode = true
                     if (currentYtId != ytId) {
                         currentYtId = ytId
+                        ytCurrentTimeMs = targetPosition
                         if (isPlaying) youtubePlayer?.loadVideo(ytId, targetPosition / 1000f)
                         else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
                     } else if (!isSelfEcho) {
-                        if (abs(ytCurrentTimeMs - targetPosition) > 1500L) {
+                        if (abs(ytCurrentTimeMs - targetPosition) > 1500L && !isUserSeeking) {
                             youtubePlayer?.seekTo(targetPosition / 1000f)
                             ytCurrentTimeMs = targetPosition
                         }
@@ -466,7 +497,7 @@ fun WatchScreen(
                         if (exoPlayer.playWhenReady != isPlaying) {
                             exoPlayer.playWhenReady = isPlaying
                         }
-                        if (abs(exoPlayer.currentPosition - targetPosition) > 1500L) {
+                        if (abs(exoPlayer.currentPosition - targetPosition) > 1500L && !isUserSeeking) {
                             exoPlayer.seekTo(targetPosition)
                         }
                     }
@@ -736,19 +767,43 @@ fun WatchScreen(
                                 override fun onReady(youTubePlayer: YouTubePlayer) {
                                     youtubePlayer = youTubePlayer
                                     if (currentYtId.isNotEmpty()) {
-                                        youTubePlayer.loadVideo(currentYtId, ytCurrentTimeMs / 1000f)
+                                        val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, ytDurationMs)
+                                        val startSec = (expected / 1000f).coerceAtLeast(0f)
+                                        if (isPlayingState) {
+                                            youTubePlayer.loadVideo(currentYtId, startSec)
+                                        } else {
+                                            youTubePlayer.cueVideo(currentYtId, startSec)
+                                        }
                                     }
                                 }
 
                                 override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
-                                    val playing = state == PlayerConstants.PlayerState.PLAYING
-                                    if (state == PlayerConstants.PlayerState.PLAYING || state == PlayerConstants.PlayerState.PAUSED) {
-                                        isPlayingState = playing
-                                    } else if (state == PlayerConstants.PlayerState.ENDED) {
-                                        isPlayingState = false
-                                        if (canControl) {
-                                            pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
+                                    when (state) {
+                                        PlayerConstants.PlayerState.PLAYING -> {
+                                            isPlayingState = true
+                                            isYtBuffering = false
+                                            val expected = calculateExpectedPosition(lastKnownPosition, true, lastUpdatedAtSnapshot, ytDurationMs)
+                                            val drift = abs(ytCurrentTimeMs - expected)
+                                            if (drift > 1500L && !isUserSeeking) {
+                                                youTubePlayer.seekTo(expected / 1000f)
+                                                ytCurrentTimeMs = expected
+                                            }
                                         }
+                                        PlayerConstants.PlayerState.PAUSED -> {
+                                            isPlayingState = false
+                                            isYtBuffering = false
+                                        }
+                                        PlayerConstants.PlayerState.BUFFERING -> {
+                                            isYtBuffering = true
+                                        }
+                                        PlayerConstants.PlayerState.ENDED -> {
+                                            isPlayingState = false
+                                            isYtBuffering = false
+                                            if (canControl) {
+                                                pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
+                                            }
+                                        }
+                                        else -> {}
                                     }
                                 }
 
@@ -762,6 +817,10 @@ fun WatchScreen(
                             }, IFramePlayerOptions.Builder().controls(0).build())
                         }
                     },
+                    onRelease = { playerView ->
+                        lifecycleOwner.lifecycle.removeObserver(playerView)
+                        playerView.release()
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -771,6 +830,9 @@ fun WatchScreen(
                             player = exoPlayer
                             useController = false
                         }
+                    },
+                    onRelease = { playerView ->
+                        playerView.player = null
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -956,7 +1018,8 @@ fun WatchScreen(
                     onToggleUnlock = {
                         db.child("controlsUnlocked").setValue(!controlsUnlocked)
                         bumpInteraction()
-                    }
+                    },
+                    onSeekingStateChanged = { isUserSeeking = it }
                 )
             }
 
@@ -977,9 +1040,18 @@ fun WatchScreen(
         }
     }
 
-    if (isChatMode) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            videoContent(Modifier.fillMaxWidth().aspectRatio(videoAspect))
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        Box(
+            modifier = if (isChatMode) Modifier.fillMaxWidth().aspectRatio(videoAspect)
+                       else Modifier.fillMaxSize()
+        ) {
+            videoContent(Modifier.fillMaxSize())
+        }
+        if (isChatMode) {
             ChatPanel(
                 messages = chatMessages,
                 listState = chatListState,
@@ -995,8 +1067,6 @@ fun WatchScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f).imePadding()
             )
         }
-    } else {
-        videoContent(Modifier.fillMaxSize())
     }
 }
 
@@ -1119,7 +1189,8 @@ private fun PlayerControlsOverlay(
     onToggleLandscape: () -> Unit,
     onOpenChat: () -> Unit,
     onToggleEmojiPicker: () -> Unit,
-    onToggleUnlock: () -> Unit
+    onToggleUnlock: () -> Unit,
+    onSeekingStateChanged: (Boolean) -> Unit = {}
 ) {
     // Local drag state so the slider follows the finger smoothly instead of
     // jumping back to the synced position on every Firebase update mid-drag.
@@ -1187,19 +1258,26 @@ private fun PlayerControlsOverlay(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(formatMillis((dragValue ?: currentMs.toFloat()).toLong()), color = Color.White, style = MaterialTheme.typography.labelSmall)
-                val maxMs = if (durationMs > 0) durationMs.toFloat() else 1f
+                val validDuration = durationMs > 0
+                val maxMs = if (validDuration) durationMs.toFloat() else 1000f
                 Slider(
                     value = (dragValue ?: currentMs.toFloat()).coerceIn(0f, maxMs),
-                    onValueChange = { if (canControl) dragValue = it },
+                    onValueChange = { 
+                        if (canControl && validDuration) {
+                            dragValue = it
+                            onSeekingStateChanged(true)
+                        }
+                    },
                     onValueChangeFinished = {
                         dragValue?.let { onSeek(it.toLong()) }
                         dragValue = null
+                        onSeekingStateChanged(false)
                     },
                     valueRange = 0f..maxMs,
-                    enabled = canControl,
+                    enabled = canControl && validDuration,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                 )
-                Text(formatMillis(durationMs), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text(formatMillis(if (validDuration) durationMs else 0L), color = Color.White, style = MaterialTheme.typography.labelSmall)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

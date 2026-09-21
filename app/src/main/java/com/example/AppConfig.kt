@@ -11,4 +11,5 @@ object AppConfig {
     const val EMAILJS_SERVICE_ID = "service_4wth4p8"
     const val EMAILJS_TEMPLATE_ID = "template_z49th4v"
     const val EMAILJS_PUBLIC_KEY = "lDl6bQaYDZKOORov5"
+    const val EMAILJS_PRIVATE_KEY = ""
 }

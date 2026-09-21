@@ -3,9 +3,83 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#000000"
-          android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-72,-72z"/>
+
+    <!-- TV Antennas -->
+    <path
+        android:strokeColor="#7E8B9B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 54,34 L 42,21" />
+    <path
+        android:fillColor="#00FF9D"
+        android:pathData="M 42,18 A 3,3 0 1,0 42,24 A 3,3 0 1,0 42,18" />
+
+    <path
+        android:strokeColor="#7E8B9B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 54,34 L 66,21" />
+    <path
+        android:fillColor="#FF3366"
+        android:pathData="M 66,18 A 3,3 0 1,0 66,24 A 3,3 0 1,0 66,18" />
+
+    <!-- Monitor Feet / Stands -->
+    <path
+        android:fillColor="#151A24"
+        android:strokeColor="#242E40"
+        android:strokeWidth="1"
+        android:pathData="M 36,76 L 31,83 H 42 L 39,76 Z" />
+    <path
+        android:fillColor="#151A24"
+        android:strokeColor="#242E40"
+        android:strokeWidth="1"
+        android:pathData="M 69,76 L 66,83 H 77 L 72,76 Z" />
+
+    <!-- TV Outer Chassis -->
+    <path
+        android:fillColor="#1A2230"
+        android:strokeColor="#2E3B52"
+        android:strokeWidth="2.5"
+        android:pathData="M 35,34 H 73 Q 81,34 81,42 V 68 Q 81,76 73,76 H 35 Q 27,76 27,68 V 42 Q 27,34 35,34 Z" />
+
+    <!-- TV Screen Bezel Area -->
+    <path
+        android:fillColor="#060A10"
+        android:pathData="M 36,38 H 72 Q 77,38 77,43 V 67 Q 77,72 72,72 H 36 Q 31,72 31,67 V 43 Q 31,38 36,38 Z" />
+
+    <!-- Screen Neon Uranium Border -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00FF9D"
+        android:strokeWidth="1.8"
+        android:pathData="M 36,38 H 72 Q 77,38 77,43 V 67 Q 77,72 72,72 H 36 Q 31,72 31,67 V 43 Q 31,38 36,38 Z" />
+
+    <!-- Reactor Pulse Ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF3366"
+        android:strokeWidth="1.5"
+        android:pathData="M 54,42 A 13,13 0 1,0 54,68 A 13,13 0 1,0 54,42" />
+
+    <!-- Uranium Hazard Indicator Arcs -->
+    <path
+        android:fillColor="#00E5FF"
+        android:fillAlpha="0.35"
+        android:pathData="M 54,44 A 11,11 0 1,0 54,66 A 11,11 0 1,0 54,44" />
+
+    <!-- Play Button Triangle (Watch Cinema Core) -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 50,48 L 63,55 L 50,62 Z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"/>
+        android:pathData="M 49,47 L 62,55 L 49,63 Z" />
+
+    <!-- Chassis Status LEDs -->
+    <path
+        android:fillColor="#00FF9D"
+        android:pathData="M 31,74 A 1.5,1.5 0 1,0 31,77 A 1.5,1.5 0 1,0 31,74" />
+    <path
+        android:fillColor="#FF3366"
+        android:pathData="M 77,74 A 1.5,1.5 0 1,0 77,77 A 1.5,1.5 0 1,0 77,74" />
 </vector>

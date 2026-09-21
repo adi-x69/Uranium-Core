@@ -87,6 +87,29 @@ fun UraniumTvApp() {
 
     val startDestination = if (auth.currentUser != null) "home" else "login"
 
+    val currentUid = auth.currentUser?.uid ?: ""
+    LaunchedEffect(currentUid) {
+        if (currentUid.isNotBlank()) {
+            val db = com.google.firebase.database.FirebaseDatabase
+                .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+                .reference
+            db.child("users").child(currentUid).get().addOnSuccessListener { snap ->
+                val cloudName = snap.child("name").getValue(String::class.java)
+                val cloudUsername = snap.child("username").getValue(String::class.java)
+                val cloudAvatar = snap.child("avatarId").getValue(String::class.java)
+                if (!cloudName.isNullOrBlank()) {
+                    UserProfileStorage.saveNameLocally(context, currentUid, cloudName)
+                }
+                if (!cloudUsername.isNullOrBlank()) {
+                    UserProfileStorage.saveUsernameLocally(context, currentUid, cloudUsername)
+                }
+                if (!cloudAvatar.isNullOrBlank()) {
+                    UserProfileStorage.saveAvatarLocally(context, currentUid, cloudAvatar)
+                }
+            }
+        }
+    }
+
     NavHost(
         navController = navController, 
         startDestination = startDestination,
@@ -117,6 +140,27 @@ fun UraniumTvApp() {
                     auth.signInWithEmailAndPassword(email, password)
                         .addOnCompleteListener { task ->
                             if (task.isSuccessful) {
+                                val uid = auth.currentUser?.uid ?: ""
+                                if (uid.isNotBlank()) {
+                                    UserProfileStorage.saveUsernameLocally(context, uid, username)
+                                    val db = com.google.firebase.database.FirebaseDatabase
+                                        .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+                                        .reference
+                                    db.child("users").child(uid).get().addOnSuccessListener { snap ->
+                                        val cloudName = snap.child("name").getValue(String::class.java)
+                                        val cloudUsername = snap.child("username").getValue(String::class.java) ?: username
+                                        val rawAvatar = snap.child("avatarId").getValue(String::class.java)
+                                        val cloudAvatar = if (rawAvatar.isNullOrBlank() || rawAvatar.startsWith("avatar_")) "iron_man" else rawAvatar.trim()
+                                        if (!cloudName.isNullOrBlank()) {
+                                            UserProfileStorage.saveNameLocally(context, uid, cloudName)
+                                            auth.currentUser?.updateProfile(
+                                                com.google.firebase.auth.UserProfileChangeRequest.Builder().setDisplayName(cloudName).build()
+                                            )
+                                        }
+                                        UserProfileStorage.saveUsernameLocally(context, uid, cloudUsername)
+                                        UserProfileStorage.saveAvatarLocally(context, uid, cloudAvatar)
+                                    }
+                                }
                                 Toast.makeText(context, "Logged in successfully!", Toast.LENGTH_SHORT).show()
                                 navController.navigate("home") {
                                     popUpTo("login") { inclusive = true }
@@ -148,6 +192,12 @@ fun UraniumTvApp() {
                         .addOnCompleteListener { task ->
                             if (task.isSuccessful) {
                                 val uid = auth.currentUser?.uid ?: ""
+                                UserProfileStorage.saveNameLocally(context, uid, cleanName)
+                                UserProfileStorage.saveUsernameLocally(context, uid, cleanUsername)
+                                UserProfileStorage.saveAvatarLocally(context, uid, avatarId)
+                                auth.currentUser?.updateProfile(
+                                    com.google.firebase.auth.UserProfileChangeRequest.Builder().setDisplayName(cleanName).build()
+                                )
                                 val db = com.google.firebase.database.FirebaseDatabase
                                     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
                                     .reference
@@ -324,6 +374,9 @@ fun LoginScreen(
                             .offset(x = w * 0.3142f, y = h * 0.2525f)
                             .size(w * 0.3825f, h * 0.1321f)
                     )
+
+                    // Sweeping cyber laser scanner beam
+                    FuturisticScannerOverlay()
 
                 ReactorLoginField(
                     value = username,
@@ -575,90 +628,28 @@ fun SignupScreen(
     }
 
     if (showEmailStep) {
-        Scaffold { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0A0A0F))
-                    .padding(innerPadding)
-                    .imePadding()
-                    .padding(horizontal = 32.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = if (otpSent) "Verify Your Email" else "One Last Step",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Color(0xFFFF5A5A),
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-
-                if (!otpSent) {
-                    Text(
-                        text = "Enter your email - we'll send a 6-digit code to verify it's yours.",
-                        color = Color(0xFF8A8F9E),
-                        modifier = Modifier.padding(bottom = 20.dp)
-                    )
-
-                    OutlinedTextField(
-                        value = email,
-                        onValueChange = { email = it },
-                        label = { Text("Email") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
-                    )
-
-                    Button(
-                        onClick = { requestOtp() },
-                        enabled = !isSendingOtp,
-                        modifier = Modifier.fillMaxWidth().height(50.dp)
-                    ) {
-                        Text(if (isSendingOtp) "Sending code…" else "Send OTP")
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    TextButton(onClick = { showEmailStep = false }) {
-                        Text("Back", color = Color(0xFF8A8F9E))
-                    }
-                } else {
-                    Text(
-                        text = "Enter the 6-digit code sent to ${email.trim().lowercase()}",
-                        color = Color(0xFF8A8F9E),
-                        modifier = Modifier.padding(bottom = 24.dp)
-                    )
-
-                    OutlinedTextField(
-                        value = otpInput,
-                        onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) otpInput = it },
-                        label = { Text("6-digit code") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
-                    )
-
-                    Button(
-                        onClick = { verifyOtp() },
-                        enabled = !isVerifying && otpInput.length == 6,
-                        modifier = Modifier.fillMaxWidth().height(50.dp)
-                    ) {
-                        Text(if (isVerifying) "Creating account…" else "Verify & Create Account")
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    TextButton(onClick = { requestOtp() }, enabled = !isSendingOtp) {
-                        Text(if (isSendingOtp) "Resending…" else "Resend code", color = Color(0xFF8A8F9E))
-                    }
-                    TextButton(onClick = { otpSent = false }) {
-                        Text("Change email", color = Color(0xFF8A8F9E))
-                    }
-                }
+        EmailVerificationScreen(
+            email = email,
+            onEmailChange = { email = it },
+            otpInput = otpInput,
+            onOtpInputChange = { otpInput = it },
+            otpSent = otpSent,
+            isSendingOtp = isSendingOtp,
+            isVerifying = isVerifying,
+            otpGeneratedAt = otpGeneratedAt,
+            otpValidityMs = otpValidityMs,
+            onRequestOtp = { requestOtp() },
+            onVerifyOtp = { verifyOtp() },
+            onChangeEmail = {
+                otpSent = false
+                otpInput = ""
+            },
+            onNavigateBack = {
+                showEmailStep = false
+                otpSent = false
+                otpInput = ""
             }
-        }
+        )
         return
     }
 
@@ -722,6 +713,9 @@ fun SignupScreen(
                         contentScale = ContentScale.FillBounds,
                         modifier = Modifier.fillMaxSize()
                     )
+
+                    // Sweeping cyber laser scanner beam
+                    FuturisticScannerOverlay()
 
                     // 3. Highlighted, non-blending bright glowing ring placed OVER the frame for the selected avatar
                     avatarSlots.forEach { (avatar, xRatio, yRatio) ->

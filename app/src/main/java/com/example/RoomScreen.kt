@@ -36,6 +36,8 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
 import com.google.firebase.database.FirebaseDatabase
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.Alignment
 import kotlin.math.abs
 import kotlinx.coroutines.launch
@@ -45,9 +47,10 @@ import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTube
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants
 
 fun getYoutubeVideoId(url: String): String? {
-    if (url.length == 11 && !url.contains("http") && !url.contains("www")) return url
+    val clean = url.trim()
+    if (clean.length == 11 && !clean.contains("http") && !clean.contains("www") && !clean.contains("/") && !clean.contains("?")) return clean
     val regex = Regex("(?:youtube(?:-nocookie)?\\.com/(?:[^/]+/.+/|(?:v|e(?:mbed)?)/|.*[?&]v=)|youtu\\.be/|youtube\\.com/shorts/)([^\"&?/\\s]{11})")
-    val match = regex.find(url)
+    val match = regex.find(clean)
     return match?.groupValues?.getOrNull(1)
 }
 
@@ -69,6 +72,7 @@ fun RoomScreen(
     val uid = auth.currentUser?.uid ?: ""
     val usersRef = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference.child("users") }
     var hasVideo by remember { mutableStateOf(false) }
+    var currentKnownUrl by remember { mutableStateOf("") }
     var hasAutoNavigatedRemote by remember { mutableStateOf(false) }
 
     var ytInputUrl by remember { mutableStateOf("") }
@@ -78,7 +82,7 @@ fun RoomScreen(
     // participants/join-leave banner system, which stays as-is). Uses its
     // own "roomPresence" node so entering/leaving RoomScreen never triggers
     // WatchScreen's banners and vice versa. ----
-    var myUsername by remember { mutableStateOf("") }
+    var myUsername by remember { mutableStateOf(UserProfileStorage.getCachedUsername(context, uid).ifEmpty { "Someone" }) }
     var hostUid by remember { mutableStateOf("") }
     var hostUsername by remember { mutableStateOf("") }
     var hasShownSelfJoinToast by remember { mutableStateOf(false) }
@@ -88,7 +92,10 @@ fun RoomScreen(
     LaunchedEffect(uid) {
         if (uid.isEmpty()) return@LaunchedEffect
         usersRef.child(uid).child("username").get()
-            .addOnSuccessListener { myUsername = it.getValue(String::class.java) ?: "Someone" }
+            .addOnSuccessListener { 
+                val name = it.getValue(String::class.java)
+                if (!name.isNullOrBlank()) myUsername = name
+            }
     }
 
     LaunchedEffect(roomCode) {
@@ -177,13 +184,19 @@ fun RoomScreen(
                 if (!snapshot.exists()) return
 
                 val lastUpdatedBy = snapshot.child("lastUpdatedBy").getValue(String::class.java) ?: ""
-                
-                // If we updated this ourselves, don't loop back our own state
-                if (lastUpdatedBy == uid) return
-
                 val videoUrl = snapshot.child("videoUrl").getValue(String::class.java) ?: ""
                 val isPlaying = snapshot.child("isPlaying").getValue(Boolean::class.java) ?: false
-                if (videoUrl.isNotEmpty()) hasVideo = true
+                
+                if (videoUrl.isNotEmpty()) {
+                    hasVideo = true
+                    if (videoUrl != currentKnownUrl) {
+                        currentKnownUrl = videoUrl
+                        hasAutoNavigatedRemote = false
+                    }
+                }
+
+                // If we updated this ourselves, don't loop back our own state
+                if (lastUpdatedBy == uid) return
 
                 if (videoUrl.isNotEmpty() && isPlaying && !hasAutoNavigatedRemote) {
                     hasAutoNavigatedRemote = true
@@ -224,9 +237,11 @@ fun RoomScreen(
                     onNavigateToSearch = onNavigateToSearch,
                     onInviteFriends = onInviteFriends,
                     onPlayYt = {
-                        if (ytInputUrl.isNotBlank()) {
-                            val ytId = getYoutubeVideoId(ytInputUrl)
-                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else ytInputUrl
+                        val clean = ytInputUrl.trim()
+                        if (clean.isNotBlank()) {
+                            val ytId = getYoutubeVideoId(clean)
+                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else clean
+                            val isYt = ytId != null
                             val updates = mapOf(
                                 "videoUrl" to finalUrl,
                                 "position" to 0L,
@@ -235,23 +250,27 @@ fun RoomScreen(
                                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
                             )
                             db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
+                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt)
 
                             hasVideo = true
                             onNavigateToWatch()
                         }
                     },
                     onPlayWeb = {
-                        if (webInputUrl.isNotBlank()) {
+                        val clean = webInputUrl.trim()
+                        if (clean.isNotBlank()) {
+                            val ytId = getYoutubeVideoId(clean)
+                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else clean
+                            val isYt = ytId != null
                             val updates = mapOf(
-                                "videoUrl" to webInputUrl,
+                                "videoUrl" to finalUrl,
                                 "position" to 0L,
                                 "isPlaying" to true,
                                 "lastUpdatedBy" to uid,
                                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
                             )
                             db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, webInputUrl, 0L, isYouTube = false)
+                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt)
 
                             hasVideo = true
                             onNavigateToWatch()
@@ -260,12 +279,14 @@ fun RoomScreen(
                 )
 
                 if (hasVideo) {
-                    TextButton(
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FuturisticHazardButton(
+                        text = "ENTER WATCH ROOM",
                         onClick = onNavigateToWatch,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                    ) {
-                        Text("Watch Fullscreen")
-                    }
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        gradient = listOf(NeonCrimson, NeonHazardAmber, NeonCyberCyan)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             } // Close Column
         }
@@ -308,6 +329,9 @@ private fun ReactorRoomHero(
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxSize()
         )
+
+        // Futuristic cyber scanner radar beam sweeping the reactor room
+        FuturisticScannerOverlay()
 
         // DNA Animation Overlay
         val context = LocalContext.current
@@ -376,13 +400,52 @@ private fun ReactorRoomHero(
             value = ytInputUrl,
             onValueChange = onYtInputChange,
             singleLine = true,
-            textStyle = TextStyle(color = Color(0xFFE7E9F0), fontSize = 15.sp),
+            textStyle = TextStyle(
+                color = Color(0xFFF0F2F8),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal
+            ),
             cursorBrush = SolidColor(Color(0xFFFF5A5A)),
             modifier = Modifier
                 .offset(x = w * 0.0240f, y = h * 0.1992f)
-                .size(w * 0.6826f, h * 0.0611f)
-                .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = 16.dp)
+                .size(w * 0.6826f, h * 0.0611f),
+            decorationBox = { innerTextField ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (ytInputUrl.isEmpty()) {
+                            Text(
+                                text = "Paste YouTube Link",
+                                color = Color(0xFF8E95A5),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                        }
+                        innerTextField()
+                    }
+                    if (ytInputUrl.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onYtInputChange("") },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear YouTube link",
+                                tint = Color(0xFF8E95A5),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
         )
 
         Box(
@@ -396,13 +459,52 @@ private fun ReactorRoomHero(
             value = webInputUrl,
             onValueChange = onWebInputChange,
             singleLine = true,
-            textStyle = TextStyle(color = Color(0xFFE7E9F0), fontSize = 15.sp),
+            textStyle = TextStyle(
+                color = Color(0xFFF0F2F8),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal
+            ),
             cursorBrush = SolidColor(Color(0xFFFF5A5A)),
             modifier = Modifier
                 .offset(x = w * 0.0240f, y = h * 0.2709f)
-                .size(w * 0.6826f, h * 0.0744f)
-                .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = 16.dp)
+                .size(w * 0.6826f, h * 0.0744f),
+            decorationBox = { innerTextField ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (webInputUrl.isEmpty()) {
+                            Text(
+                                text = "Paste Web Video Link (.mp4)",
+                                color = Color(0xFF8E95A5),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Normal,
+                                maxLines = 1
+                            )
+                        }
+                        innerTextField()
+                    }
+                    if (webInputUrl.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onWebInputChange("") },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear Web link",
+                                tint = Color(0xFF8E95A5),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
         )
 
         Box(

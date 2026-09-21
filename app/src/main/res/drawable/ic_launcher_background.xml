@@ -1,10 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#151C28" />
+                <item android:offset="0.5" android:color="#0A0E17" />
+                <item android:offset="1.0" android:color="#040609" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Outer tech chamber ring -->
     <path
-        android:fillColor="#3DDC84"
-        android:pathData="M0,0h108v108h-108z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#102E26"
+        android:strokeWidth="1.5"
+        android:pathData="M 54,16 A 38,38 0 1,0 54,92 A 38,38 0 1,0 54,16" />
+
+    <!-- Circuit guide ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00FF9D"
+        android:strokeAlpha="0.2"
+        android:strokeWidth="1"
+        android:pathData="M 54,22 A 32,32 0 1,0 54,86 A 32,32 0 1,0 54,22" />
+
+    <!-- Cyber corner targeting brackets -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#243048"
+        android:strokeWidth="1.5"
+        android:pathData="M 20,28 L 20,20 L 28,20 M 80,20 L 88,20 L 88,28 M 88,80 L 88,88 L 80,88 M 28,88 L 20,88 L 20,80" />
 </vector>
+

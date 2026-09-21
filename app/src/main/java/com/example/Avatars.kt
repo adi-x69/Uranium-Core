@@ -9,7 +9,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -32,67 +30,47 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 import com.example.ui.theme.bouncyClick
 
 /**
- * A preset avatar: an id (persisted per-user), an optional drawable resource (for custom Marvel avatars),
- * or an emoji glyph fallback, and a background/glow color.
+ * A superhero avatar: unique id, background aura color, drawable resource, and hero name.
+ * All avatars are high-fidelity superhero character graphics.
  */
 data class Avatar(
     val id: String,
-    val emoji: String = "⚡",
     val color: Color = Color(0xFFEF5350),
-    val drawableRes: Int? = null,
+    val drawableRes: Int,
     val name: String = ""
 )
 
-val MARVEL_AVATARS: List<Avatar> = listOf(
-    Avatar("iron_man", "🤖", Color(0xFFD32F2F), R.drawable.iron_man, "Iron Man"),
-    Avatar("spiderman", "🕷️", Color(0xFFE53935), R.drawable.spiderman, "Spider-Man"),
-    Avatar("deadpool", "⚔️", Color(0xFFC62828), R.drawable.deadpool, "Deadpool"),
-    Avatar("wolverine", "🐺", Color(0xFFFBC02D), R.drawable.wolverine, "Wolverine"),
-    Avatar("hulk", "💪", Color(0xFF388E3C), R.drawable.hulk, "Hulk"),
-    Avatar("she_hulk", "⚖️", Color(0xFF43A047), R.drawable.she_hulk, "She-Hulk"),
-    Avatar("groot", "🌳", Color(0xFF6D4C41), R.drawable.groot, "Groot"),
-    Avatar("wanda", "🔮", Color(0xFF8E24AA), R.drawable.wanda, "Scarlet Witch")
+val SUPERHERO_AVATARS: List<Avatar> = listOf(
+    Avatar("iron_man", Color(0xFFD32F2F), R.drawable.iron_man, "Iron Man"),
+    Avatar("spiderman", Color(0xFFE53935), R.drawable.spiderman, "Spider-Man"),
+    Avatar("deadpool", Color(0xFFC62828), R.drawable.deadpool, "Deadpool"),
+    Avatar("wolverine", Color(0xFFFBC02D), R.drawable.wolverine, "Wolverine"),
+    Avatar("hulk", Color(0xFF388E3C), R.drawable.hulk, "Hulk"),
+    Avatar("she_hulk", Color(0xFF43A047), R.drawable.she_hulk, "She-Hulk"),
+    Avatar("groot", Color(0xFF6D4C41), R.drawable.groot, "Groot"),
+    Avatar("wanda", Color(0xFF8E24AA), R.drawable.wanda, "Scarlet Witch")
 )
 
-val PRESET_AVATARS: List<Avatar> = MARVEL_AVATARS + listOf(
-    Avatar("avatar_1", "🦄", Color(0xFF7C4DFF)),
-    Avatar("avatar_2", "🐱", Color(0xFFFF7043)),
-    Avatar("avatar_3", "🐶", Color(0xFF26A69A)),
-    Avatar("avatar_4", "🦊", Color(0xFFFFA726)),
-    Avatar("avatar_5", "🐼", Color(0xFF42A5F5)),
-    Avatar("avatar_6", "🐸", Color(0xFF66BB6A)),
-    Avatar("avatar_7", "🐵", Color(0xFF8D6E63)),
-    Avatar("avatar_8", "🐧", Color(0xFF5C6BC0)),
-    Avatar("avatar_9", "🦁", Color(0xFFEF5350)),
-    Avatar("avatar_10", "🐨", Color(0xFF78909C)),
-    Avatar("avatar_11", "🐯", Color(0xFFFFCA28)),
-    Avatar("avatar_12", "🐙", Color(0xFFAB47BC))
-)
-
-/** Looks up a preset avatar by id, falling back to the first preset if not found. */
-fun avatarById(id: String?): Avatar =
-    PRESET_AVATARS.firstOrNull { it.id == id } ?: PRESET_AVATARS[0]
+// Alias references for project-wide backwards compatibility
+val MARVEL_AVATARS: List<Avatar> = SUPERHERO_AVATARS
+val PRESET_AVATARS: List<Avatar> = SUPERHERO_AVATARS
 
 /**
- * @param pulsing When true, draws an animated glow ring around the avatar to indicate
- * the person is actively present (e.g. currently in the room/watch screen). Pulses
- * opacity + scale on a loop using [MaterialTheme]'s primary (room-vibe) color, so it
- * automatically matches whatever [com.example.ui.theme.RoomVibe] is in effect.
+ * Looks up a superhero avatar by id.
+ * Any legacy emoji avatar id (e.g. "avatar_1") or invalid id automatically falls back to Iron Man.
+ */
+fun avatarById(id: String?): Avatar =
+    SUPERHERO_AVATARS.firstOrNull { it.id == id } ?: SUPERHERO_AVATARS[0]
+
+/**
+ * Performance-optimized pulsing glow ring that only runs infinite animations when active.
  */
 @Composable
-fun AvatarCircle(
-    avatar: Avatar,
-    size: Dp = 56.dp,
-    modifier: Modifier = Modifier,
-    selected: Boolean = false,
-    pulsing: Boolean = false
-) {
-    val glowColor = MaterialTheme.colorScheme.primary
+private fun PulsingGlowRing(size: Dp, color: Color) {
     val transition = rememberInfiniteTransition(label = "avatarPulse")
     val pulseScale by transition.animateFloat(
         initialValue = 1f,
@@ -113,19 +91,37 @@ fun AvatarCircle(
         label = "pulseAlpha"
     )
 
+    Box(
+        modifier = Modifier
+            .size(size)
+            .graphicsLayer {
+                scaleX = pulseScale
+                scaleY = pulseScale
+                alpha = pulseAlpha
+            }
+            .border(width = 2.5.dp, color = color, shape = CircleShape)
+    )
+}
+
+/**
+ * Renders a circular superhero avatar image with optional active-presence glow or selection border.
+ */
+@Composable
+fun AvatarCircle(
+    avatar: Avatar,
+    size: Dp = 56.dp,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    pulsing: Boolean = false
+) {
+    val glowColor = MaterialTheme.colorScheme.primary
+
     Box(contentAlignment = Alignment.Center) {
+        // Optimized: Only allocate and tick infinite animation when pulsing is true
         if (pulsing) {
-            Box(
-                modifier = Modifier
-                    .size(size)
-                    .graphicsLayer {
-                        scaleX = pulseScale
-                        scaleY = pulseScale
-                        alpha = pulseAlpha
-                    }
-                    .border(width = 2.5.dp, color = glowColor, shape = CircleShape)
-            )
+            PulsingGlowRing(size = size, color = glowColor)
         }
+
         Box(
             modifier = modifier
                 .size(size)
@@ -135,11 +131,11 @@ fun AvatarCircle(
                     if (selected) {
                         Modifier
                             .border(
-                                width = 3.5.dp,
+                                width = 3.dp,
                                 color = Color(0xFF00F5FF),
                                 shape = CircleShape
                             )
-                            .padding(1.dp)
+                            .padding(1.5.dp)
                             .border(
                                 width = 1.5.dp,
                                 color = Color.White,
@@ -151,23 +147,19 @@ fun AvatarCircle(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            if (avatar.drawableRes != null) {
-                Image(
-                    painter = painterResource(avatar.drawableRes),
-                    contentDescription = avatar.name.ifEmpty { avatar.id },
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(
-                    text = avatar.emoji,
-                    fontSize = (size.value / 2).sp
-                )
-            }
+            Image(
+                painter = painterResource(avatar.drawableRes),
+                contentDescription = avatar.name.ifEmpty { avatar.id },
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
 
+/**
+ * Clean superhero avatar selection grid (4 avatars per row, 2 rows total).
+ */
 @Composable
 fun AvatarPickerGrid(
     selectedId: String,
@@ -175,23 +167,19 @@ fun AvatarPickerGrid(
     modifier: Modifier = Modifier,
     columns: Int = 4
 ) {
-    // Plain chunked rows instead of LazyVerticalGrid: with only a dozen presets there's
-    // no need for laziness, and a Lazy grid can't be nested inside another scrollable
-    // container (like SignupScreen's verticalScroll Column) without a fixed height -
-    // doing so throws "measured with an infinity maximum height constraints" at runtime.
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        PRESET_AVATARS.chunked(columns).forEach { rowAvatars ->
+        SUPERHERO_AVATARS.chunked(columns).forEach { rowAvatars ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 rowAvatars.forEach { avatar ->
                     AvatarCircle(
                         avatar = avatar,
-                        size = 56.dp,
+                        size = 58.dp,
                         selected = avatar.id == selectedId,
                         modifier = Modifier.bouncyClick { onSelect(avatar.id) }
                     )
@@ -200,3 +188,4 @@ fun AvatarPickerGrid(
         }
     }
 }
+
