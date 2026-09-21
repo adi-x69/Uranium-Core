@@ -6,25 +6,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ---- Futuristic/geometric type system ----
-//
-// NOTE ON FONTS: this ships using the platform sans-serif with wide tracking +
-// heavy weights, which reads geometric/sci-fi without bundling anything and
-// compiles correctly with zero setup. To swap in the real pairing this was
-// designed for (Orbitron for display, Rajdhani for body - both free/open on
-// Google Fonts), do this once in Android Studio:
-//   1. Right-click res/ -> New -> Other -> "Google Fonts" font (or use the
-//      Resource Manager's "+" -> Font button) and search "Orbitron", then
-//      "Rajdhani". Android Studio downloads them and safely auto-generates
-//      the res/values/font_certs.xml + res/font/*.xml it needs - this file
-//      has a long certificate blob that must come from that generator, not
-//      be hand-typed, so it's intentionally left out here.
-//   2. Replace the two FontFamily vals below with
-//      FontFamily(Font(R.font.orbitron)) / FontFamily(Font(R.font.rajdhani)).
-// Everything else (Theme.kt, all screens) references DisplayFontFamily /
-// BodyFontFamily, so that's the only edit needed.
-val DisplayFontFamily = FontFamily.SansSerif
-val BodyFontFamily = FontFamily.SansSerif
+import androidx.compose.ui.text.font.Font
+import com.example.R
+
+// ---- Futuristic/geometric type system with custom bundled Google Fonts ----
+val DisplayFontFamily = FontFamily(Font(R.font.space_grotesk, FontWeight.Normal))
+val BodyFontFamily = FontFamily(Font(R.font.plus_jakarta_sans, FontWeight.Normal))
 
 val Typography = Typography(
     displayLarge = TextStyle(

@@ -9,18 +9,26 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,7 +36,11 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
@@ -37,6 +49,9 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
@@ -48,19 +63,39 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.ui.theme.bouncyClick
+import com.example.ui.theme.VoidBlack
+import com.example.ui.theme.AbyssSurface
+import com.example.ui.theme.AbyssSurfaceElevated
+import com.example.ui.theme.AbyssOutline
+import com.example.ui.theme.MistText
+import com.example.ui.theme.MistTextMuted
+import com.example.ui.theme.CyanCore
+import com.example.ui.theme.CyanGlow
+import com.example.ui.theme.CrimsonCore
+import com.example.ui.theme.CrimsonGlow
+import com.example.ui.theme.VioletGlow
+import com.example.ui.theme.OnlineGreen
+import com.example.ui.theme.DisplayFontFamily
+import com.example.ui.theme.BodyFontFamily
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -104,6 +139,7 @@ private data class ChatMessage(
     val id: String,
     val senderUid: String,
     val senderUsername: String,
+    val avatarId: String = "iron_man",
     val text: String,
     val timestamp: Long
 )
@@ -229,6 +265,7 @@ fun WatchScreen(
     var ytDurationMs by remember { mutableStateOf(0L) }
     var isYtBuffering by remember { mutableStateOf(false) }
     var isPlayingState by remember { mutableStateOf(false) }
+    var roomIsPlaying by remember { mutableStateOf(false) }
     var isApplyingRemoteState by remember { mutableStateOf(false) }
     var hostUid by remember { mutableStateOf("") }
     var controlsUnlocked by remember { mutableStateOf(false) }
@@ -483,6 +520,7 @@ fun WatchScreen(
 
                 lastKnownPosition = position
                 lastUpdatedAtSnapshot = lastUpdatedAt
+                roomIsPlaying = isPlaying
                 isPlayingState = isPlaying
 
                 val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, if (isYouTubeMode) ytDurationMs else exoDurationMs)
@@ -497,7 +535,8 @@ fun WatchScreen(
                         if (isPlaying) youtubePlayer?.loadVideo(ytId, targetPosition / 1000f)
                         else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
                     } else if (!isSelfEcho) {
-                        if (abs(ytCurrentTimeMs - targetPosition) > 1500L && !isUserSeeking) {
+                        val drift = abs(ytCurrentTimeMs - targetPosition)
+                        if (drift > 1500L && !isUserSeeking) {
                             youtubePlayer?.seekTo(targetPosition / 1000f)
                             ytCurrentTimeMs = targetPosition
                         }
@@ -515,7 +554,8 @@ fun WatchScreen(
                         if (exoPlayer.playWhenReady != isPlaying) {
                             exoPlayer.playWhenReady = isPlaying
                         }
-                        if (abs(exoPlayer.currentPosition - targetPosition) > 1500L && !isUserSeeking) {
+                        val drift = abs(exoPlayer.currentPosition - targetPosition)
+                        if (drift > 1500L && !isUserSeeking) {
                             exoPlayer.seekTo(targetPosition)
                         }
                     }
@@ -531,15 +571,24 @@ fun WatchScreen(
     DisposableEffect(exoPlayer, lifecycleOwner) {
         val playerListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                isPlayingState = isPlaying
-                // NOTE: Do not auto-push to Firebase here.
-                // Intentional user actions (Play/Pause/Seek/Skip) push directly.
-                // Auto-pushing here was triggering the buffer/seek pause feedback loop!
+                if (isPlaying) {
+                    isPlayingState = true
+                } else if (!roomIsPlaying) {
+                    isPlayingState = false
+                }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 localPlaybackState = state
-                if (state == Player.STATE_ENDED && canControl) {
+                if (state == Player.STATE_READY) {
+                    if (roomIsPlaying && !exoPlayer.playWhenReady) {
+                        exoPlayer.playWhenReady = true
+                    }
+                    if (roomIsPlaying) {
+                        isPlayingState = true
+                    }
+                } else if (state == Player.STATE_ENDED && canControl) {
                     isPlayingState = false
+                    roomIsPlaying = false
                     pushPlaybackUpdate(false, exoPlayer.duration.coerceAtLeast(0L))
                 }
             }
@@ -654,6 +703,7 @@ fun WatchScreen(
                     id = id,
                     senderUid = senderUid,
                     senderUsername = senderUsername,
+                    avatarId = msgAvatarId,
                     text = text,
                     timestamp = timestamp
                 )
@@ -774,17 +824,20 @@ fun WatchScreen(
     // if this user doesn't have control - same gating as every other playback action. ----
     fun skip(deltaMs: Long) {
         if (!canControl) return
+        val willPlay = isPlayingState || roomIsPlaying
         if (isYouTubeMode) {
             val ceiling = if (ytDurationMs > 0) ytDurationMs else Long.MAX_VALUE
             val newPos = (ytCurrentTimeMs + deltaMs).coerceIn(0L, ceiling)
             youtubePlayer?.seekTo(newPos / 1000f)
             ytCurrentTimeMs = newPos
-            pushPlaybackUpdate(isPlayingState, newPos)
+            if (willPlay) youtubePlayer?.play()
+            pushPlaybackUpdate(willPlay, newPos)
         } else {
             val ceiling = exoPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
             val newPos = (exoPlayer.currentPosition + deltaMs).coerceIn(0L, ceiling)
             exoPlayer.seekTo(newPos)
-            pushPlaybackUpdate(isPlayingState, newPos)
+            if (willPlay) exoPlayer.playWhenReady = true
+            pushPlaybackUpdate(willPlay, newPos)
         }
         bumpInteraction()
     }
@@ -849,27 +902,32 @@ fun WatchScreen(
                                     }
                                 }
 
-                                override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
+                                 override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
                                     when (state) {
                                         PlayerConstants.PlayerState.PLAYING -> {
                                             isPlayingState = true
                                             isYtBuffering = false
-                                            val expected = calculateExpectedPosition(lastKnownPosition, true, lastUpdatedAtSnapshot, ytDurationMs)
-                                            val drift = abs(ytCurrentTimeMs - expected)
-                                            if (drift > 1500L && !isUserSeeking) {
-                                                youTubePlayer.seekTo(expected / 1000f)
-                                                ytCurrentTimeMs = expected
-                                            }
                                         }
                                         PlayerConstants.PlayerState.PAUSED -> {
-                                            isPlayingState = false
                                             isYtBuffering = false
+                                            if (roomIsPlaying && !isUserSeeking) {
+                                                // YouTube paused internally during seek or buffer while room is playing!
+                                                // Resume playback immediately so connected friends don't get paused.
+                                                youTubePlayer.play()
+                                                isPlayingState = true
+                                            } else {
+                                                isPlayingState = false
+                                            }
                                         }
                                         PlayerConstants.PlayerState.BUFFERING -> {
                                             isYtBuffering = true
+                                            if (roomIsPlaying) {
+                                                isPlayingState = true
+                                            }
                                         }
                                         PlayerConstants.PlayerState.ENDED -> {
                                             isPlayingState = false
+                                            roomIsPlaying = false
                                             isYtBuffering = false
                                             if (canControl) {
                                                 pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
@@ -1094,6 +1152,7 @@ fun WatchScreen(
                         if (!canControl) return@PlayerControlsOverlay
                         val newPlaying = !isPlayingState
                         isPlayingState = newPlaying
+                        roomIsPlaying = newPlaying
                         if (isYouTubeMode) {
                             if (newPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
                             pushPlaybackUpdate(newPlaying, ytCurrentTimeMs)
@@ -1107,13 +1166,16 @@ fun WatchScreen(
                     onSkipForward = { skip(10000L) },
                     onSeek = { targetMs ->
                         if (!canControl) return@PlayerControlsOverlay
+                        val willPlay = isPlayingState || roomIsPlaying
                         if (isYouTubeMode) {
                             youtubePlayer?.seekTo(targetMs / 1000f)
                             ytCurrentTimeMs = targetMs
+                            if (willPlay) youtubePlayer?.play()
                         } else {
                             exoPlayer.seekTo(targetMs)
+                            if (willPlay) exoPlayer.playWhenReady = true
                         }
-                        pushPlaybackUpdate(isPlayingState, targetMs)
+                        pushPlaybackUpdate(willPlay, targetMs)
                         bumpInteraction()
                     },
                     isLandscape = isLandscape,
@@ -1166,6 +1228,12 @@ fun WatchScreen(
                 onSend = { sendChat() },
                 onClose = { closeChat() },
                 typingUsers = othersTyping,
+                participantsCount = participants.size,
+                onSendReaction = { emoji -> sendReaction(emoji) },
+                onQuickSend = { text ->
+                    chatInput = text
+                    sendChat()
+                },
                 // imePadding here ONLY - the video above keeps its exact fixed size and
                 // position always; just the message list + input compress/slide to clear
                 // the keyboard.
@@ -1536,92 +1604,692 @@ private fun ChatPanel(
     onSend: () -> Unit,
     onClose: () -> Unit,
     typingUsers: List<String> = emptyList(),
+    participantsCount: Int = 1,
+    onSendReaction: ((String) -> Unit)? = null,
+    onQuickSend: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Live Chat", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back to video")
+    // Header pulsing LIVE animation
+    val infiniteTransition = rememberInfiniteTransition(label = "livePulse")
+    val livePulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.35f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "livePulseScale"
+    )
+    val livePulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "livePulseAlpha"
+    )
+
+    Surface(
+        color = VoidBlack,
+        contentColor = MistText,
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header Bar: Pulsing LIVE badge + Room Participant count + Return to Fullscreen
+            Surface(
+                color = AbyssSurfaceElevated,
+                contentColor = MistText,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left Section: LIVE pill + Title
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Pulsing LIVE capsule
+                        Surface(
+                            color = Color(0x183DDC84),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, OnlineGreen.copy(alpha = 0.45f))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.size(10.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .scale(livePulseScale)
+                                            .alpha(livePulseAlpha)
+                                            .background(OnlineGreen.copy(alpha = 0.5f), CircleShape)
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .background(OnlineGreen, CircleShape)
+                                    )
+                                }
+                                Text(
+                                    text = "LIVE",
+                                    fontFamily = DisplayFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 1.1.sp,
+                                    color = OnlineGreen
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "CHAT",
+                            fontFamily = DisplayFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            letterSpacing = 1.2.sp,
+                            color = Color.White
+                        )
+
+                        // Participant count pill
+                        Surface(
+                            color = Color(0x1819E8E0),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, CyanCore.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Group,
+                                    contentDescription = null,
+                                    tint = CyanCore,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "${participantsCount.coerceAtLeast(1)}",
+                                    fontFamily = DisplayFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp,
+                                    color = CyanGlow
+                                )
+                            }
+                        }
+                    }
+
+                    // Button to return to fullscreen video
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .bouncyClick(onClose)
+                            .background(AbyssOutline, RoundedCornerShape(10.dp))
+                    ) {
+                        Icon(
+                            Icons.Default.Fullscreen,
+                            contentDescription = "Enter full screen",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(
+                color = AbyssOutline.copy(alpha = 0.7f),
+                thickness = 1.dp
+            )
+
+            // Message Area
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                if (messages.isEmpty()) {
+                    ChatEmptyState(
+                        onPromptClick = { prompt ->
+                            onQuickSend?.invoke(prompt) ?: run {
+                                onInputChange(prompt)
+                                onSend()
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item { Spacer(modifier = Modifier.height(6.dp)) }
+                        items(messages, key = { it.id }) { msg ->
+                            val isMine = msg.senderUid == myUid
+                            ChatMessageItem(
+                                msg = msg,
+                                isMine = isMine
+                            )
+                        }
+                        item { Spacer(modifier = Modifier.height(6.dp)) }
+                    }
+                }
+            }
+
+            // Animated Typing Wave Indicator
+            AnimatedVisibility(
+                visible = typingUsers.isNotEmpty(),
+                enter = fadeIn(animationSpec = tween(200)) +
+                        slideInVertically(animationSpec = tween(220)) { it / 2 },
+                exit = fadeOut(animationSpec = tween(180)) +
+                        slideOutVertically(animationSpec = tween(180)) { it / 2 }
+            ) {
+                AnimatedTypingWave(typingUsers = typingUsers)
+            }
+
+            // Quick Reaction Emoji Bar (Instant live burst + chat message)
+            QuickEmojiBar(
+                onEmojiTap = { emoji ->
+                    onSendReaction?.invoke(emoji)
+                    onQuickSend?.invoke(emoji) ?: run {
+                        onInputChange(emoji)
+                        onSend()
+                    }
+                }
+            )
+
+            // Cyber Input Bar with animated Send Button
+            Surface(
+                color = AbyssSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(
+                        color = AbyssOutline.copy(alpha = 0.5f),
+                        thickness = 1.dp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = onInputChange,
+                            modifier = Modifier.weight(1f),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = BodyFontFamily,
+                                color = Color.White
+                            ),
+                            placeholder = {
+                                Text(
+                                    "Drop a reaction or message...",
+                                    fontFamily = BodyFontFamily,
+                                    fontSize = 14.sp,
+                                    color = MistTextMuted
+                                )
+                            },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = AbyssOutline,
+                                focusedContainerColor = AbyssSurfaceElevated,
+                                unfocusedContainerColor = AbyssSurfaceElevated,
+                                cursorColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(26.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = {
+                                if (input.isNotBlank()) onSend()
+                            })
+                        )
+
+                        // Animated Send Button with spring scale and icon rotation
+                        val sendScale by animateFloatAsState(
+                            targetValue = if (input.isNotBlank()) 1.08f else 0.96f,
+                            animationSpec = spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium),
+                            label = "sendScale"
+                        )
+                        val sendRotation by animateFloatAsState(
+                            targetValue = if (input.isNotBlank()) -15f else 0f,
+                            animationSpec = spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium),
+                            label = "sendRot"
+                        )
+
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(46.dp)
+                                .scale(sendScale)
+                                .bouncyClick {
+                                    if (input.isNotBlank()) onSend()
+                                }
+                                .background(
+                                    brush = if (input.isNotBlank()) {
+                                        Brush.linearGradient(
+                                            listOf(MaterialTheme.colorScheme.primary, CrimsonGlow)
+                                        )
+                                    } else {
+                                        Brush.linearGradient(
+                                            listOf(AbyssOutline, AbyssSurfaceElevated)
+                                        )
+                                    },
+                                    shape = CircleShape
+                                )
+                        ) {
+                            Icon(
+                                Icons.Default.Send,
+                                contentDescription = "Send",
+                                tint = if (input.isNotBlank()) Color.White else MistTextMuted,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .graphicsLayer { rotationZ = sendRotation }
+                            )
+                        }
+                    }
+                }
             }
         }
-        Divider()
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items(messages, key = { it.id }) { msg ->
-                val isMine = msg.senderUid == myUid
-                Column(
-                    horizontalAlignment = if (isMine) Alignment.End else Alignment.Start,
-                    modifier = Modifier.fillMaxWidth()
+    }
+}
+
+/**
+ * Animated individual message item with typography and smooth entrance.
+ */
+@Composable
+private fun ChatMessageItem(
+    msg: ChatMessage,
+    isMine: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val senderColor = remember(msg.senderUid, msg.senderUsername) {
+        val palette = listOf(
+            CyanCore,
+            Color(0xFFFFB74D),
+            VioletGlow,
+            Color(0xFF81D4FA),
+            Color(0xFFFF80AB),
+            Color(0xFF69F0AE),
+            Color(0xFFFFD54F)
+        )
+        val idx = (msg.senderUsername.hashCode() and 0x7FFFFFFF) % palette.size
+        palette[idx]
+    }
+
+    AnimatedVisibility(
+        visible = true,
+        enter = slideInVertically(
+            animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+        ) { it / 2 } + fadeIn(tween(220)) + scaleIn(initialScale = 0.94f),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        if (isMine) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = 18.dp,
+                        bottomEnd = 4.dp
+                    ),
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(MaterialTheme.colorScheme.primary, CrimsonGlow)
+                            ),
+                            RoundedCornerShape(
+                                topStart = 18.dp,
+                                topEnd = 18.dp,
+                                bottomStart = 18.dp,
+                                bottomEnd = 4.dp
+                            )
+                        )
                 ) {
-                    if (!isMine) {
-                        Text(
-                            text = msg.senderUsername,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 2.dp)
-                        )
-                    }
-                    Surface(
-                        color = if (isMine) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(
-                            topStart = 16.dp,
-                            topEnd = 16.dp,
-                            bottomStart = if (isMine) 16.dp else 4.dp,
-                            bottomEnd = if (isMine) 4.dp else 16.dp
-                        ),
-                        modifier = Modifier.widthIn(max = 260.dp)
-                    ) {
-                        Text(
-                            text = msg.text,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isMine) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                        )
-                    }
+                    Text(
+                        text = msg.text,
+                        fontFamily = BodyFontFamily,
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(top = 3.dp, end = 4.dp)
+                ) {
                     Text(
                         text = formatTimestamp(msg.timestamp),
+                        fontFamily = BodyFontFamily,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp)
+                        color = MistTextMuted
+                    )
+                    Text(
+                        text = "• You",
+                        fontFamily = DisplayFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MistTextMuted.copy(alpha = 0.7f)
                     )
                 }
             }
-            item { Spacer(modifier = Modifier.height(8.dp)) }
+        } else {
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AvatarCircle(
+                    avatar = avatarById(msg.avatarId),
+                    size = 32.dp,
+                    pulsing = false,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Column(
+                    horizontalAlignment = Alignment.Start,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    Text(
+                        text = msg.senderUsername,
+                        fontFamily = DisplayFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = senderColor,
+                        modifier = Modifier.padding(start = 6.dp, bottom = 3.dp)
+                    )
+
+                    Surface(
+                        color = AbyssSurfaceElevated,
+                        border = BorderStroke(1.dp, AbyssOutline),
+                        shape = RoundedCornerShape(
+                            topStart = 18.dp,
+                            topEnd = 18.dp,
+                            bottomStart = 4.dp,
+                            bottomEnd = 18.dp
+                        ),
+                        modifier = Modifier.widthIn(max = 280.dp)
+                    ) {
+                        Text(
+                            text = msg.text,
+                            fontFamily = BodyFontFamily,
+                            fontSize = 15.sp,
+                            lineHeight = 21.sp,
+                            color = Color(0xFFF0F3F8),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                        )
+                    }
+
+                    Text(
+                        text = formatTimestamp(msg.timestamp),
+                        fontFamily = BodyFontFamily,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MistTextMuted,
+                        modifier = Modifier.padding(start = 6.dp, top = 3.dp)
+                    )
+                }
+            }
         }
-        AnimatedVisibility(
-            visible = typingUsers.isNotEmpty(),
-            enter = fadeIn(animationSpec = com.example.ui.theme.UraniumMotion.fade()),
-            exit = fadeOut(animationSpec = com.example.ui.theme.UraniumMotion.fade())
+    }
+}
+
+/**
+ * Animated 3-dot sinusoidal wave typing indicator.
+ */
+@Composable
+private fun AnimatedTypingWave(
+    typingUsers: List<String>,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "typingWave")
+    val waveProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+        label = "waveProgress"
+    )
+
+    Surface(
+        color = AbyssSurfaceElevated,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, AbyssOutline),
+        modifier = modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
+            // 3 bouncing wave dots
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.height(16.dp)
+            ) {
+                for (i in 0..2) {
+                    val offsetY = (kotlin.math.sin(waveProgress + i * 1.05f) * 3.5f).dp
+                    Box(
+                        modifier = Modifier
+                            .offset(y = offsetY)
+                            .size(5.dp)
+                            .background(CyanCore, CircleShape)
+                    )
+                }
+            }
+
             Text(
                 text = typingIndicatorText(typingUsers),
+                fontFamily = DisplayFontFamily,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.Gray,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                color = CyanGlow
             )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    }
+}
+
+/**
+ * Quick emoji reaction bar with high-speed tap reactions.
+ */
+@Composable
+private fun QuickEmojiBar(
+    onEmojiTap: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val emojis = remember {
+        listOf("🔥", "😂", "🍿", "❤️", "💀", "🚀", "⚡", "😱", "🎉", "👀", "👏", "🤯")
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Tag chip
+        Surface(
+            color = CrimsonCore.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, CrimsonCore.copy(alpha = 0.4f))
         ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-                singleLine = true
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+            ) {
+                Icon(
+                    Icons.Default.LocalFireDepartment,
+                    contentDescription = null,
+                    tint = CrimsonGlow,
+                    modifier = Modifier.size(13.dp)
+                )
+                Text(
+                    text = "REACT",
+                    fontFamily = DisplayFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.sp,
+                    color = CrimsonGlow
+                )
+            }
+        }
+
+        emojis.forEach { emoji ->
+            Surface(
+                color = AbyssSurfaceElevated,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, AbyssOutline),
+                modifier = Modifier.bouncyClick { onEmojiTap(emoji) }
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Text(
+                        text = emoji,
+                        fontSize = 17.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Empty chat state with breathing animation and clickable prompt chips.
+ */
+@Composable
+private fun ChatEmptyState(
+    onPromptClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "emptyStateGlow")
+    val glowScale by infiniteTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "glowScale"
+    )
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "glowAlpha"
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(76.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(68.dp)
+                    .scale(glowScale)
+                    .alpha(glowAlpha)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(CyanCore.copy(alpha = 0.4f), Color.Transparent)
+                        ),
+                        CircleShape
+                    )
             )
-            IconButton(onClick = onSend) {
-                Icon(Icons.Default.Send, contentDescription = "Send")
+            Surface(
+                color = AbyssSurfaceElevated,
+                shape = CircleShape,
+                border = BorderStroke(1.dp, AbyssOutline),
+                modifier = Modifier.size(52.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Icon(
+                        Icons.Default.Forum,
+                        contentDescription = null,
+                        tint = CyanCore,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(
+            text = "LIVE ROOM CHAT",
+            fontFamily = DisplayFontFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            letterSpacing = 1.2.sp,
+            color = Color.White
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = "Share hot takes and react in real-time with friends watching.",
+            fontFamily = BodyFontFamily,
+            fontSize = 13.sp,
+            color = MistTextMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Quick starter prompts
+        val prompts = listOf(
+            "🍿 Grab some popcorn",
+            "🔥 This part is fire!",
+            "😂 Bro no way",
+            "⚡ Sync is dialed in"
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState())
+        ) {
+            prompts.forEach { prompt ->
+                Surface(
+                    color = AbyssSurfaceElevated,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, AbyssOutline),
+                    modifier = Modifier.bouncyClick { onPromptClick(prompt) }
+                ) {
+                    Text(
+                        text = prompt,
+                        fontFamily = BodyFontFamily,
+                        fontSize = 12.sp,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
+                }
             }
         }
     }
