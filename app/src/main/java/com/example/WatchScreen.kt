@@ -10,9 +10,14 @@ import android.net.NetworkRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -48,11 +53,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.ui.theme.bouncyClick
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -96,6 +104,16 @@ private data class ChatMessage(
     val id: String,
     val senderUid: String,
     val senderUsername: String,
+    val text: String,
+    val timestamp: Long
+)
+
+/** In-app popup notification data for incoming chat messages in fullscreen watch mode. */
+private data class ChatNotification(
+    val id: String,
+    val senderUid: String,
+    val senderUsername: String,
+    val avatarId: String,
     val text: String,
     val timestamp: Long
 )
@@ -589,20 +607,73 @@ fun WatchScreen(
     val chatMessages = remember { mutableStateListOf<ChatMessage>() }
     val chatListState = rememberLazyListState()
     var chatInput by remember { mutableStateOf("") }
+    var activeChatNotification by remember { mutableStateOf<ChatNotification?>(null) }
+    val screenOpenedAt = remember { System.currentTimeMillis() }
+    var isInitialChatSyncComplete by remember { mutableStateOf(false) }
+
+    // Auto-dismiss the chat popup notification after ~4 seconds
+    LaunchedEffect(activeChatNotification?.id) {
+        if (activeChatNotification != null) {
+            delay(4000)
+            activeChatNotification = null
+        }
+    }
+
+    // Dismiss the notification immediately if chat mode is opened
+    LaunchedEffect(isChatMode) {
+        if (isChatMode) {
+            activeChatNotification = null
+        }
+    }
 
     DisposableEffect(roomCode) {
         val chatRef = db.child("chat")
+
+        // Single value event listener fires once existing historical children have finished loading
+        chatRef.limitToLast(1).addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                isInitialChatSyncComplete = true
+            }
+            override fun onCancelled(error: DatabaseError) {
+                isInitialChatSyncComplete = true
+            }
+        })
+
         val listener = object : ChildEventListener {
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
                 val id = snapshot.key ?: return
+                val senderUid = snapshot.child("senderUid").getValue(String::class.java) ?: ""
+                val senderUsername = snapshot.child("senderUsername").getValue(String::class.java) ?: "unknown"
+                val text = snapshot.child("text").getValue(String::class.java) ?: ""
+                val timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: 0L
+                val msgAvatarId = snapshot.child("avatarId").getValue(String::class.java)
+                    ?: participants.firstOrNull { it.uid == senderUid }?.avatarId
+                    ?: UserProfileStorage.getCachedAvatar(context, senderUid).ifEmpty { "iron_man" }
+
                 val msg = ChatMessage(
                     id = id,
-                    senderUid = snapshot.child("senderUid").getValue(String::class.java) ?: "",
-                    senderUsername = snapshot.child("senderUsername").getValue(String::class.java) ?: "unknown",
-                    text = snapshot.child("text").getValue(String::class.java) ?: "",
-                    timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: 0L
+                    senderUid = senderUid,
+                    senderUsername = senderUsername,
+                    text = text,
+                    timestamp = timestamp
                 )
                 if (chatMessages.none { it.id == id }) chatMessages.add(msg)
+
+                // Trigger in-app popup notification for new incoming messages:
+                // - Only when initial sync is complete or timestamp is recent
+                // - Sender is not current user
+                // - Chat mode is currently closed (isChatMode == false)
+                val isLiveMessage = isInitialChatSyncComplete && (timestamp <= 0L || timestamp >= screenOpenedAt - 5000L)
+                if (isLiveMessage && senderUid != uid && !isChatMode && text.isNotBlank()) {
+                    activeChatNotification = ChatNotification(
+                        id = id,
+                        senderUid = senderUid,
+                        senderUsername = senderUsername,
+                        avatarId = msgAvatarId,
+                        text = text,
+                        timestamp = timestamp
+                    )
+                }
             }
             override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {}
             override fun onChildRemoved(snapshot: DataSnapshot) {}
@@ -624,6 +695,7 @@ fun WatchScreen(
             mapOf(
                 "senderUid" to uid,
                 "senderUsername" to myUsername,
+                "avatarId" to myAvatarId.ifEmpty { "iron_man" },
                 "text" to text,
                 "timestamp" to ServerValue.TIMESTAMP
             )
@@ -934,6 +1006,39 @@ fun WatchScreen(
                 }
             }
 
+            // In-app incoming chat notification popup for fullscreen watch mode
+            AnimatedVisibility(
+                visible = activeChatNotification != null && !isChatMode,
+                enter = slideInVertically(
+                    initialOffsetY = { -it },
+                    animationSpec = spring(
+                        dampingRatio = 0.65f,
+                        stiffness = 380f
+                    )
+                ) + fadeIn(
+                    animationSpec = tween(200)
+                ),
+                exit = slideOutVertically(
+                    targetOffsetY = { -it },
+                    animationSpec = tween(220)
+                ) + fadeOut(
+                    animationSpec = tween(180)
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = if (othersBuffering != null) 98.dp else 56.dp, start = 16.dp, end = 16.dp)
+            ) {
+                activeChatNotification?.let { notif ->
+                    IncomingChatNotificationBanner(
+                        notification = notif,
+                        onTap = {
+                            activeChatNotification = null
+                            openChat()
+                        }
+                    )
+                }
+            }
+
             // Shown when playback is drifted/out of sync; tap to snap back in sync.
             if (showSyncNowButton) {
                 Surface(
@@ -1153,6 +1258,91 @@ private fun PlaybackNotificationBanner(entry: PlaybackBannerEntry, onDone: () ->
                 text = entry.text,
                 color = Color.White,
                 style = MaterialTheme.typography.labelMedium
+            )
+        }
+    }
+}
+
+/**
+ * In-app incoming chat notification banner displayed during fullscreen watching
+ * when chat mode is closed. Styled consistently with the buffering and network
+ * indicators with dark translucent background, crimson accent border, and rounded corners.
+ */
+@Composable
+private fun IncomingChatNotificationBanner(
+    notification: ChatNotification,
+    onTap: () -> Unit
+) {
+    Surface(
+        color = Color(0xF00D1117),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.2.dp, Color(0xFFFF3344).copy(alpha = 0.85f)),
+        shadowElevation = 8.dp,
+        modifier = Modifier
+            .bouncyClick(onTap)
+            .widthIn(min = 200.dp, max = 380.dp)
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            // Sender's avatar
+            AvatarCircle(
+                avatar = avatarById(notification.avatarId),
+                size = 30.dp,
+                pulsing = false
+            )
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = notification.senderUsername,
+                        color = Color(0xFFFF5252),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "• now",
+                        color = Color.White.copy(alpha = 0.45f),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
+                val previewText = remember(notification.text) {
+                    val singleLine = notification.text.replace("\n", " ").trim()
+                    if (singleLine.length > 40) {
+                        singleLine.take(40).trimEnd() + "…"
+                    } else {
+                        singleLine
+                    }
+                }
+
+                Text(
+                    text = previewText,
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Icon(
+                imageVector = Icons.Default.Chat,
+                contentDescription = "Open chat to reply",
+                tint = Color(0xFFFF5252).copy(alpha = 0.85f),
+                modifier = Modifier.size(16.dp)
             )
         }
     }
