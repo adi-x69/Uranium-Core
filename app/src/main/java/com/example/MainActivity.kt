@@ -539,16 +539,19 @@ fun SignupScreen(
                 }
                 val code = generateOtpCode()
                 coroutineScope.launch {
-                    val sent = sendOtpEmail(cleanEmail, code)
+                    val result = sendOtpEmail(cleanEmail, code)
                     isSendingOtp = false
-                    if (sent) {
-                        generatedOtp = code
-                        otpGeneratedAt = System.currentTimeMillis()
-                        otpInput = ""
-                        otpSent = true
-                        Toast.makeText(context, "Code sent to $cleanEmail", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "Couldn't send the code - check your connection and try again", Toast.LENGTH_LONG).show()
+                    when (result) {
+                        is OtpSendResult.Success -> {
+                            generatedOtp = code
+                            otpGeneratedAt = System.currentTimeMillis()
+                            otpInput = ""
+                            otpSent = true
+                            Toast.makeText(context, "Code sent to $cleanEmail", Toast.LENGTH_SHORT).show()
+                        }
+                        is OtpSendResult.Failure -> {
+                            Toast.makeText(context, "Couldn't send code: ${result.detail}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
             }
