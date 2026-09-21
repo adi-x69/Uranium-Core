@@ -20,26 +20,27 @@
         </aapt:attr>
     </path>
 
-    <!-- Outer tech chamber ring -->
+    <!-- Outer reactor chamber border -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#102E26"
-        android:strokeWidth="1.5"
-        android:pathData="M 54,16 A 38,38 0 1,0 54,92 A 38,38 0 1,0 54,16" />
+        android:strokeColor="#252F3E"
+        android:strokeWidth="2"
+        android:pathData="M 54,18 A 36,36 0 1,0 54,90 A 36,36 0 1,0 54,18" />
 
-    <!-- Circuit guide ring -->
+    <!-- Subtle red neon reactor chamber ring -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#00FF9D"
-        android:strokeAlpha="0.2"
-        android:strokeWidth="1"
-        android:pathData="M 54,22 A 32,32 0 1,0 54,86 A 32,32 0 1,0 54,22" />
+        android:strokeColor="#FF2233"
+        android:strokeAlpha="0.4"
+        android:strokeWidth="1.2"
+        android:pathData="M 54,23 A 31,31 0 1,0 54,85 A 31,31 0 1,0 54,23" />
 
-    <!-- Cyber corner targeting brackets -->
+    <!-- Corner mech wing accents -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#243048"
+        android:strokeColor="#FF2233"
+        android:strokeAlpha="0.7"
         android:strokeWidth="1.5"
-        android:pathData="M 20,28 L 20,20 L 28,20 M 80,20 L 88,20 L 88,28 M 88,80 L 88,88 L 80,88 M 28,88 L 20,88 L 20,80" />
+        android:pathData="M 22,30 L 22,22 L 30,22 M 78,22 L 86,22 L 86,30 M 86,78 L 86,86 L 78,86 M 30,86 L 22,86 L 22,78" />
 </vector>
 

@@ -4,82 +4,160 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- TV Antennas -->
+    <!-- Top Crest Plate with Camera & 5 Stars -->
     <path
-        android:strokeColor="#7E8B9B"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:pathData="M 54,34 L 42,21" />
-    <path
-        android:fillColor="#00FF9D"
-        android:pathData="M 42,18 A 3,3 0 1,0 42,24 A 3,3 0 1,0 42,18" />
+        android:fillColor="#1C2432"
+        android:strokeColor="#364357"
+        android:strokeWidth="1.2"
+        android:pathData="M 33,26 L 54,18 L 75,26 L 71,36 L 54,34 L 37,36 Z" />
 
+    <!-- 5 Red Stars -->
+    <!-- Center Top Star -->
     <path
-        android:strokeColor="#7E8B9B"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:pathData="M 54,34 L 66,21" />
+        android:fillColor="#FF2233"
+        android:pathData="M 54,14.5 L 55.2,17.5 L 58.5,17.8 L 56,20.2 L 56.8,23.5 L 54,21.8 L 51.2,23.5 L 52,20.2 L 49.5,17.8 L 52.8,17.5 Z" />
+    <!-- Flanking Stars Left -->
     <path
-        android:fillColor="#FF3366"
-        android:pathData="M 66,18 A 3,3 0 1,0 66,24 A 3,3 0 1,0 66,18" />
+        android:fillColor="#FF2233"
+        android:pathData="M 43,21 L 43.8,23 L 46,23.2 L 44.3,24.8 L 44.8,27 L 43,25.8 L 41.2,27 L 41.7,24.8 L 40,23.2 L 42.2,23 Z" />
+    <path
+        android:fillColor="#FF2233"
+        android:pathData="M 36,24.5 L 36.6,26 L 38.3,26.1 L 37,27.3 L 37.4,29 L 36,28.1 L 34.6,29 L 35,27.3 L 33.7,26.1 L 35.4,26 Z" />
+    <!-- Flanking Stars Right -->
+    <path
+        android:fillColor="#FF2233"
+        android:pathData="M 65,21 L 65.8,23 L 68,23.2 L 66.3,24.8 L 66.8,27 L 65,25.8 L 63.2,27 L 63.7,24.8 L 62,23.2 L 64.2,23 Z" />
+    <path
+        android:fillColor="#FF2233"
+        android:pathData="M 72,24.5 L 72.6,26 L 74.3,26.1 L 73,27.3 L 73.4,29 L 72,28.1 L 70.6,29 L 71,27.3 L 69.7,26.1 L 71.4,26 Z" />
 
-    <!-- Monitor Feet / Stands -->
+    <!-- Cinema Camera Glyph -->
     <path
-        android:fillColor="#151A24"
-        android:strokeColor="#242E40"
-        android:strokeWidth="1"
-        android:pathData="M 36,76 L 31,83 H 42 L 39,76 Z" />
+        android:fillColor="#8C98AA"
+        android:pathData="M 50,25 H 55 V 30 H 50 Z" />
     <path
-        android:fillColor="#151A24"
-        android:strokeColor="#242E40"
-        android:strokeWidth="1"
-        android:pathData="M 69,76 L 66,83 H 77 L 72,76 Z" />
+        android:fillColor="#8C98AA"
+        android:pathData="M 55,26.5 L 58.5,24.5 V 30.5 L 55,28.5 Z" />
 
-    <!-- TV Outer Chassis -->
-    <path
-        android:fillColor="#1A2230"
-        android:strokeColor="#2E3B52"
-        android:strokeWidth="2.5"
-        android:pathData="M 35,34 H 73 Q 81,34 81,42 V 68 Q 81,76 73,76 H 35 Q 27,76 27,68 V 42 Q 27,34 35,34 Z" />
-
-    <!-- TV Screen Bezel Area -->
-    <path
-        android:fillColor="#060A10"
-        android:pathData="M 36,38 H 72 Q 77,38 77,43 V 67 Q 77,72 72,72 H 36 Q 31,72 31,67 V 43 Q 31,38 36,38 Z" />
-
-    <!-- Screen Neon Uranium Border -->
+    <!-- Outer Mechanical Reactor Ring -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#00FF9D"
-        android:strokeWidth="1.8"
-        android:pathData="M 36,38 H 72 Q 77,38 77,43 V 67 Q 77,72 72,72 H 36 Q 31,72 31,67 V 43 Q 31,38 36,38 Z" />
+        android:strokeColor="#2C3748"
+        android:strokeWidth="4"
+        android:pathData="M 54,29 A 27,27 0 1,0 54,83 A 27,27 0 1,0 54,29" />
 
-    <!-- Reactor Pulse Ring -->
+    <!-- Concentric Glowing Red Neon Track -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#FF3366"
-        android:strokeWidth="1.5"
-        android:pathData="M 54,42 A 13,13 0 1,0 54,68 A 13,13 0 1,0 54,42" />
+        android:strokeColor="#FF1830"
+        android:strokeWidth="2.2"
+        android:pathData="M 54,32 A 24,24 0 1,0 54,80 A 24,24 0 1,0 54,32" />
 
-    <!-- Uranium Hazard Indicator Arcs -->
+    <!-- 4 Cardinal Red LED Sensors -->
     <path
-        android:fillColor="#00E5FF"
-        android:fillAlpha="0.35"
-        android:pathData="M 54,44 A 11,11 0 1,0 54,66 A 11,11 0 1,0 54,44" />
+        android:strokeColor="#FF6677"
+        android:strokeWidth="2"
+        android:pathData="M 54,29 V 33 M 54,79 V 83 M 27,56 H 31 M 77,56 H 81" />
 
-    <!-- Play Button Triangle (Watch Cinema Core) -->
+    <!-- Bottom Chevron Vent -->
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M 50,48 L 63,55 L 50,62 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#FF2233"
+        android:strokeWidth="2"
+        android:pathData="M 46,84 L 54,90 L 62,84" />
+
+    <!-- Rutherford-Bohr Atomic Orbit 1 (Tilted 10 deg) -->
+    <group
+        android:pivotX="54"
+        android:pivotY="56"
+        android:rotation="10">
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF1830"
+            android:strokeWidth="2.2"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFDDE2"
+            android:strokeWidth="0.8"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+    </group>
+
+    <!-- Rutherford-Bohr Atomic Orbit 2 (Rotated +65 deg) -->
+    <group
+        android:pivotX="54"
+        android:pivotY="56"
+        android:rotation="68">
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF1830"
+            android:strokeWidth="2.2"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFDDE2"
+            android:strokeWidth="0.8"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+    </group>
+
+    <!-- Rutherford-Bohr Atomic Orbit 3 (Rotated -52 deg) -->
+    <group
+        android:pivotX="54"
+        android:pivotY="56"
+        android:rotation="-52">
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FF1830"
+            android:strokeWidth="2.2"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFDDE2"
+            android:strokeWidth="0.8"
+            android:pathData="M 54,38 C 61,38 62.5,46 62.5,56 C 62.5,66 61,74 54,74 C 47,74 45.5,66 45.5,56 C 45.5,46 47,38 54,38 Z" />
+    </group>
+
+    <!-- Electron Beads -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M 49,47 L 62,55 L 49,63 Z" />
+        android:pathData="M 61,43 A 1.8,1.8 0 1,0 61,46.6 A 1.8,1.8 0 1,0 61,43" />
+    <path
+        android:fillColor="#FF3344"
+        android:pathData="M 45,64 A 1.6,1.6 0 1,0 45,67.2 A 1.6,1.6 0 1,0 45,64" />
+    <path
+        android:fillColor="#FF3344"
+        android:pathData="M 66,61 A 1.6,1.6 0 1,0 66,64.2 A 1.6,1.6 0 1,0 66,61" />
 
-    <!-- Chassis Status LEDs -->
+    <!-- Cinema 35mm Film Strip (Curving into bottom right) -->
     <path
-        android:fillColor="#00FF9D"
-        android:pathData="M 31,74 A 1.5,1.5 0 1,0 31,77 A 1.5,1.5 0 1,0 31,74" />
+        android:fillColor="#202735"
+        android:strokeColor="#3A4658"
+        android:strokeWidth="1.2"
+        android:pathData="M 50,71 C 60,70 70,66 94,52 L 95,59 C 72,74 62,78 51,77 Z" />
+    <!-- Sprocket Holes Along Film Strip -->
     <path
-        android:fillColor="#FF3366"
-        android:pathData="M 77,74 A 1.5,1.5 0 1,0 77,77 A 1.5,1.5 0 1,0 77,74" />
+        android:fillColor="#0E131C"
+        android:pathData="M 54,71 H 56 V 73 H 54 Z M 62,69 H 64 V 71 H 62 Z M 70,66 H 72 V 68 H 70 Z M 78,62 H 80 V 64 H 78 Z M 86,57 H 88 V 59 H 86 Z" />
+    <path
+        android:fillColor="#0E131C"
+        android:pathData="M 54,75 H 56 V 77 H 54 Z M 62,74 H 64 V 76 H 62 Z M 70,71 H 72 V 73 H 70 Z M 78,67 H 80 V 69 H 78 Z M 86,63 H 88 V 65 H 86 Z" />
+
+    <!-- Center Atomic Nucleus (3D Spherical Red Core) -->
+    <path
+        android:fillColor="#FF1830"
+        android:pathData="M 54,50 A 6,6 0 1,0 54,62 A 6,6 0 1,0 54,50" />
+    <path
+        android:fillColor="#E00020"
+        android:pathData="M 54,51 A 5,5 0 1,0 54,61 A 5,5 0 1,0 54,51" />
+    <!-- Specular Highlight -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M 52,53 A 1.5,1.5 0 1,0 52,56 A 1.5,1.5 0 1,0 52,53" />
+
+    <!-- Film Strip Particle Embers -->
+    <path
+        android:fillColor="#FF4433"
+        android:pathData="M 91,48 A 1,1 0 1,0 91,50 A 1,1 0 1,0 91,48 M 88,52 A 0.8,0.8 0 1,0 88,53.6 A 0.8,0.8 0 1,0 88,52" />
 </vector>
+
