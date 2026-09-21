@@ -15,13 +15,20 @@ fun generateOtpCode(): String = (100000..999999).random().toString()
 
 private val emailJsClient = OkHttpClient()
 
+sealed class OtpSendResult {
+    object Success : OtpSendResult()
+    data class Failure(val detail: String) : OtpSendResult()
+}
+
 /**
  * Sends a 6-digit code to [toEmail] via EmailJS's REST API - no backend/Cloud
  * Function required, so this works on Firebase's free Spark plan. Requires
  * an EmailJS template with {{to_email}} and {{otp_code}} variables; fill in
- * the three EMAILJS_* constants in AppConfig.kt first.
+ * the three EMAILJS_* constants in AppConfig.kt first, and make sure
+ * Account > Security > "Allow non-browser applications" is turned ON in your
+ * EmailJS dashboard, since this is an Android app calling the API directly.
  */
-suspend fun sendOtpEmail(toEmail: String, otpCode: String): Boolean = withContext(Dispatchers.IO) {
+suspend fun sendOtpEmail(toEmail: String, otpCode: String): OtpSendResult = withContext(Dispatchers.IO) {
     try {
         val payload = JSONObject().apply {
             put("service_id", AppConfig.EMAILJS_SERVICE_ID)
@@ -37,8 +44,15 @@ suspend fun sendOtpEmail(toEmail: String, otpCode: String): Boolean = withContex
             .url("https://api.emailjs.com/api/v1.0/email/send")
             .post(body)
             .build()
-        emailJsClient.newCall(request).execute().use { it.isSuccessful }
+        emailJsClient.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                OtpSendResult.Success
+            } else {
+                val errorBody = response.body?.string()?.take(200) ?: "(no response body)"
+                OtpSendResult.Failure("HTTP ${response.code}: $errorBody")
+            }
+        }
     } catch (e: Exception) {
-        false
+        OtpSendResult.Failure("${e.javaClass.simpleName}: ${e.message}")
     }
 }
