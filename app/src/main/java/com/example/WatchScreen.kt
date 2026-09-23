@@ -124,15 +124,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// The reaction set, arranged roughly by mood: laughing -> crying -> neutral/sly ->
-// shocked/disgusted -> love/romantic -> misc/animals.
+// The reaction set for quick chat reactions and bursts.
 val REACTION_EMOJIS = listOf(
-    "😁", "😅", "😂", "🤣", "😭",
-    "🙂", "🙃", "😏", "😎", "🙄", "😑", "😒",
-    "😋", "🤤", "🤪", "😝", "😜", "🤭",
-    "😱", "😣", "🤧", "🤮", "🤢",
-    "❤️", "❤️‍🩹", "💔", "🫀", "💦", "💋", "🫦", "👄", "🫶🏻",
-    "🐷", "🐻", "🤡", "💩", "💀", "🌚", "🖕🏻"
+    "😁", "🤣", "🫪", "😋", "🤪", "🤭", "😚", "🥰", "🫰🏻", "💋", "🖕🏻", "🤡", "👽", "🌚"
 )
 
 private data class ChatMessage(
@@ -212,7 +206,10 @@ fun WatchScreen(
     val participantRef = remember(roomCode, uid) { db.child("participants").child(uid) }
     DisposableEffect(roomCode, uid) {
         if (uid.isNotEmpty()) participantRef.onDisconnect().removeValue()
-        onDispose { participantRef.removeValue() }
+        onDispose {
+            participantRef.removeValue()
+            recordRoomLeave(usersRef, uid, roomCode)
+        }
     }
     LaunchedEffect(roomCode, uid, myUsername, myAvatarId) {
         if (uid.isNotEmpty() && myUsername.isNotEmpty()) {
@@ -2118,7 +2115,7 @@ private fun QuickEmojiBar(
     modifier: Modifier = Modifier
 ) {
     val emojis = remember {
-        listOf("😁","🤣","🫪","😋","🤪","🤭","😚","🥰","🫰🏻","💋","🖕🏻","🤡","👽","🌚"
+        listOf("😁", "🤣", "🫪", "😋", "🤪", "🤭", "😚", "🥰", "🫰🏻", "💋", "🖕🏻", "🤡", "👽", "🌚")
     }
 
     Row(

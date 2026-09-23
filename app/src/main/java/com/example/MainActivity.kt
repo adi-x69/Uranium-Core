@@ -6,11 +6,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,10 +25,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,7 +53,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ui.theme.bouncyClick
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.DisplayFontFamily
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -401,11 +413,11 @@ fun LoginScreen(
                     textPadding = w * 0.5876f * iconClearance
                 )
 
-                Box(
+                AnimatedCyberLoginButton(
+                    onClick = { onLogin(username, password) },
                     modifier = Modifier
                         .offset(x = w * 0.2278f, y = h * 0.6446f)
                         .size(w * 0.5396f, h * 0.0637f)
-                        .bouncyClick(onClick = { onLogin(username, password) })
                 )
 
                 Box(
@@ -415,17 +427,17 @@ fun LoginScreen(
                         .bouncyClick(onClick = onNavigateToSignup)
                 )
 
-                Box(
+                CoolAnimatedInstaLogo(
+                    onClick = {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://instagram.com/uraniumm_235")
+                        )
+                        context.startActivity(intent)
+                    },
                     modifier = Modifier
                         .offset(x = w * 0.4196f, y = h * 0.7958f)
                         .size(w * 0.1619f, h * 0.0637f)
-                        .bouncyClick(onClick = {
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse("https://instagram.com/uraniumm_235")
-                            )
-                            context.startActivity(intent)
-                        })
                 )
             }
         }
@@ -476,6 +488,320 @@ private fun ReactorLoginField(
                 }
             }
         )
+    }
+}
+
+@Composable
+fun AnimatedCyberLoginButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "loginButtonLoop")
+
+    // Continuous rhythmic scale-up and scale-down breathing animation
+    val breathingScale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.075f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "loginScale"
+    )
+
+    // Pulsing crimson reactor aura glow intensity
+    val glowIntensity by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "loginGlow"
+    )
+
+    // Moving laser shimmer reflection sweep across the button surface
+    val shimmerProgress by infiniteTransition.animateFloat(
+        initialValue = -0.5f,
+        targetValue = 1.5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "loginShimmer"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = breathingScale
+                scaleY = breathingScale
+            }
+            .bouncyClick(onClick = onClick)
+    ) {
+        // 1. Outer diffuse neon red reactor glow behind the photo button
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = 1.12f
+                    scaleY = 1.25f
+                }
+        ) {
+            drawRoundRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFFF1744).copy(alpha = 0.75f * glowIntensity),
+                        Color(0xFFFF1744).copy(alpha = 0.25f * glowIntensity),
+                        Color.Transparent
+                    ),
+                    center = center,
+                    radius = size.width * 0.52f
+                ),
+                size = size,
+                cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx())
+            )
+        }
+
+        // 2. THE ACTUAL ORIGINAL PHOTO of the Login button
+        Image(
+            painter = painterResource(R.drawable.login_button),
+            contentDescription = "Login",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // 3. Shimmer reflection light sheen sweeping across the photo surface
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val startX = w * shimmerProgress
+            val sweepW = w * 0.32f
+            drawRoundRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color(0x11FFFFFF),
+                        Color(0x66FF5252),
+                        Color(0x88FFFFFF),
+                        Color(0x66FF5252),
+                        Color(0x11FFFFFF),
+                        Color.Transparent
+                    ),
+                    startX = startX - sweepW,
+                    endX = startX + sweepW
+                ),
+                size = size,
+                cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx())
+            )
+        }
+    }
+}
+
+@Composable
+fun CoolAnimatedInstaLogo(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "instaPhotoAnim")
+
+    // 1. Breathing scale up and scale down
+    val breathingScale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "instaScale"
+    )
+
+    // 2. Continuous rotating radiant energy angle around the photo
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "instaAngle"
+    )
+
+    // 3. Expanding sonar radar pulse waves
+    val sonarWave by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "sonarWave"
+    )
+
+    // 4. Strobe spark intensity
+    val strobeSpark by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "strobeSpark"
+    )
+
+    // 5. Light sheen gleam sweep across the Instagram photo
+    val sheenSweep by infiniteTransition.animateFloat(
+        initialValue = -1.2f,
+        targetValue = 2.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "sheenSweep"
+    )
+
+    var isFlashing by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .bouncyClick {
+                if (!isFlashing) {
+                    isFlashing = true
+                    coroutineScope.launch {
+                        delay(180)
+                        isFlashing = false
+                        onClick()
+                    }
+                }
+            }
+    ) {
+        // A. Expanding Sonar Radar Rings behind the photo
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val baseRadius = (minOf(size.width, size.height) / 2f) * 0.9f
+
+            // Wave 1
+            val r1 = baseRadius * (1.0f + sonarWave * 0.7f)
+            val alpha1 = ((1f - sonarWave) * 0.75f).coerceIn(0f, 1f)
+            drawRoundRect(
+                color = Color(0xFFFF1744).copy(alpha = alpha1),
+                topLeft = Offset(cx - r1, cy - r1),
+                size = Size(r1 * 2f, r1 * 2f),
+                cornerRadius = CornerRadius(r1 * 0.4f, r1 * 0.4f),
+                style = Stroke(width = 1.8.dp.toPx() * (1f - sonarWave * 0.4f))
+            )
+
+            // Wave 2
+            val wave2 = (sonarWave + 0.5f) % 1f
+            val r2 = baseRadius * (1.0f + wave2 * 0.7f)
+            val alpha2 = ((1f - wave2) * 0.5f).coerceIn(0f, 1f)
+            drawRoundRect(
+                color = Color(0xFFFF5252).copy(alpha = alpha2),
+                topLeft = Offset(cx - r2, cy - r2),
+                size = Size(r2 * 2f, r2 * 2f),
+                cornerRadius = CornerRadius(r2 * 0.4f, r2 * 0.4f),
+                style = Stroke(width = 1.4.dp.toPx() * (1f - wave2 * 0.4f))
+            )
+        }
+
+        // B. The Animated Instagram Photo Container
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = breathingScale
+                    scaleY = breathingScale
+                }
+        ) {
+            // 1. Rotating Radiant Energy Ring & Diffuse Neon Aura around the photo
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val pad = 1.dp.toPx()
+                val corner = 12.dp.toPx()
+                rotate(degrees = rotationAngle, pivot = center) {
+                    drawRoundRect(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                Color(0xFFFF1744),
+                                Color(0xFFFF5252),
+                                Color(0xFFFFD600),
+                                Color(0xFFFF1744),
+                                Color(0xFFE040FB),
+                                Color(0xFFFF1744)
+                            )
+                        ),
+                        topLeft = Offset(pad, pad),
+                        size = Size(size.width - pad * 2f, size.height - pad * 2f),
+                        cornerRadius = CornerRadius(corner, corner),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
+
+                // Diffuse neon aura around photo
+                drawRoundRect(
+                    brush = Brush.radialGradient(
+                        listOf(
+                            Color(0xFFFF1744).copy(alpha = 0.55f * strobeSpark),
+                            Color.Transparent
+                        ),
+                        center = center,
+                        radius = size.width * 0.65f
+                    ),
+                    size = size,
+                    cornerRadius = CornerRadius(corner, corner)
+                )
+            }
+
+            // 2. THE ACTUAL ORIGINAL PHOTO of Instagram!
+            Image(
+                painter = painterResource(R.drawable.instagram_icon),
+                contentDescription = "Instagram",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(2.dp)
+            )
+
+            // 3. Diagonal Holographic Sheen Gleam sweeping across the Instagram photo
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(2.dp)
+            ) {
+                val corner = 10.dp.toPx()
+                val sweepX = size.width * sheenSweep
+                val sweepW = size.width * 0.35f
+                drawRoundRect(
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color(0x22FFFFFF),
+                            Color(0x77FF6584),
+                            Color(0x99FFFFFF),
+                            Color(0x77FF6584),
+                            Color(0x22FFFFFF),
+                            Color.Transparent
+                        ),
+                        startX = sweepX - sweepW,
+                        endX = sweepX + sweepW
+                    ),
+                    size = size,
+                    cornerRadius = CornerRadius(corner, corner)
+                )
+
+                // 4. Interactive camera flash burst on tap
+                if (isFlashing) {
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.8f),
+                        size = size,
+                        cornerRadius = CornerRadius(corner, corner)
+                    )
+                }
+            }
+        }
     }
 }
 

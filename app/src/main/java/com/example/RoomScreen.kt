@@ -112,7 +112,10 @@ fun RoomScreen(
     val presenceRef = remember(roomCode, uid) { db.child("roomPresence").child(uid) }
     DisposableEffect(roomCode, uid) {
         if (uid.isNotEmpty()) presenceRef.onDisconnect().removeValue()
-        onDispose { presenceRef.removeValue() }
+        onDispose {
+            presenceRef.removeValue()
+            recordRoomLeave(usersRef, uid, roomCode)
+        }
     }
     LaunchedEffect(roomCode, uid, myUsername) {
         if (uid.isNotEmpty() && myUsername.isNotEmpty()) {
@@ -168,7 +171,7 @@ fun RoomScreen(
                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
             )
             db.updateChildren(updates)
-            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true)
+            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true, isNewVideo = true)
             
             hasVideo = true
             
@@ -250,7 +253,7 @@ fun RoomScreen(
                                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
                             )
                             db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt)
+                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
 
                             hasVideo = true
                             onNavigateToWatch()
@@ -270,7 +273,7 @@ fun RoomScreen(
                                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
                             )
                             db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt)
+                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
 
                             hasVideo = true
                             onNavigateToWatch()

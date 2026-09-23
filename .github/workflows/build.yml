@@ -22,6 +22,54 @@ jobs:
         with:
           gradle-version: 9.3.1
 
+      - name: Restore google-services.json (if missing)
+        env:
+          GOOGLE_SERVICES_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ ! -f app/google-services.json ]; then
+            if [ -n "$GOOGLE_SERVICES_SECRET" ]; then
+              echo "Restoring google-services.json from GitHub Secrets..."
+              if echo "$GOOGLE_SERVICES_SECRET" | base64 -d 2>/dev/null | grep -q "project_info"; then
+                echo "$GOOGLE_SERVICES_SECRET" | base64 -d > app/google-services.json
+              else
+                echo "$GOOGLE_SERVICES_SECRET" > app/google-services.json
+              fi
+            else
+              echo "::warning::app/google-services.json not found in repository. Creating build fallback config..."
+              cat << 'EOF' > app/google-services.json
+          {
+            "project_info": {
+              "project_number": "305050970719",
+              "project_id": "uranium-tv-core",
+              "storage_bucket": "uranium-tv-core.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:305050970719:android:c5a09e8b7c8728bc7289ea",
+                  "android_client_info": {
+                    "package_name": "com.uranium.tv"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyAshYZdK3GcT8_r0IoJTG5uNVH1V_oCZIA"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+            fi
+          fi
+
       - name: Use the fixed signing key (create a temporary one only if the repo has none)
         run: |
           if [ ! -f debug.keystore ]; then

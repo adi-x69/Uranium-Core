@@ -124,12 +124,32 @@ fun HomeScreen(
     }
 
     // Continue Watching: per-room resume points for this user, most recent first.
+    // Automatically filters out and purges rooms where video was created > 2 hours ago
+    // or user left for > 2 hours continuously.
     DisposableEffect(uid) {
         val cwRef = db.child("users").child(uid).child("continueWatching")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                continueWatching = snapshot.children
-                    .mapNotNull { child -> child.key?.let { code -> child.toContinueWatchingEntry(code) } }
+                val now = System.currentTimeMillis()
+                val active = mutableListOf<ContinueWatchingEntry>()
+                val expiredCodes = mutableListOf<String>()
+
+                snapshot.children.forEach { child ->
+                    val code = child.key ?: return@forEach
+                    val entry = child.toContinueWatchingEntry(code) ?: return@forEach
+                    if (entry.isExpired(now)) {
+                        expiredCodes.add(code)
+                    } else {
+                        active.add(entry)
+                    }
+                }
+
+                // Clean up expired history from database
+                expiredCodes.forEach { code ->
+                    cwRef.child(code).removeValue()
+                }
+
+                continueWatching = active
                     .sortedByDescending { it.updatedAt }
                     .take(10)
             }
@@ -137,6 +157,22 @@ fun HomeScreen(
         }
         cwRef.addValueEventListener(listener)
         onDispose { cwRef.removeEventListener(listener) }
+    }
+
+    // Periodic check every minute to auto-remove entries once they reach 2 hours
+    LaunchedEffect(uid, continueWatching) {
+        if (continueWatching.isNotEmpty()) {
+            while (true) {
+                kotlinx.coroutines.delay(60_000L)
+                val now = System.currentTimeMillis()
+                val (expired, active) = continueWatching.partition { it.isExpired(now) }
+                if (expired.isNotEmpty()) {
+                    continueWatching = active
+                    val cwRef = db.child("users").child(uid).child("continueWatching")
+                    expired.forEach { cwRef.child(it.roomCode).removeValue() }
+                }
+            }
+        }
     }
 
     // Friends + presence, for the online-avatars row.
@@ -241,8 +277,8 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(bottom = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 AnimatedVisibility(
                     visible = onlineFriends.isNotEmpty(),
@@ -259,7 +295,11 @@ fun HomeScreen(
                 ) {
                     ContinueWatchingRow(
                         entries = continueWatching,
-                        onResume = { entry -> onNavigateToWatch(entry.roomCode) }
+                        onResume = { entry -> onNavigateToWatch(entry.roomCode) },
+                        onDismiss = { entry ->
+                            continueWatching = continueWatching.filter { it.roomCode != entry.roomCode }
+                            removeContinueWatching(db.child("users"), uid, entry.roomCode)
+                        }
                     )
                 }
 
@@ -541,59 +581,59 @@ private fun ReactorHomeHero(
 
 @Composable
 private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) {
-    Column(modifier = Modifier.padding(top = 16.dp)) {
+    Column(modifier = Modifier.padding(top = 4.dp)) {
         Row(
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(6.dp)
                     .background(NeonToxicGreen, CircleShape)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 "FRIENDS ONLINE",
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                letterSpacing = 1.2.sp
+                letterSpacing = 1.sp
             )
         }
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(friends, key = { it.uid }) { friend ->
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.width(68.dp)
+                    modifier = Modifier.width(52.dp)
                 ) {
                     Box(
                         modifier = Modifier
                             .bouncyClick { onClick() }
-                            .border(1.5.dp, NeonCyberCyan.copy(alpha = 0.6f), CircleShape)
-                            .padding(2.dp)
+                            .border(1.2.dp, NeonCyberCyan.copy(alpha = 0.6f), CircleShape)
+                            .padding(1.5.dp)
                     ) {
-                        AvatarCircle(avatar = avatarById(friend.avatarId), size = 52.dp)
+                        AvatarCircle(avatar = avatarById(friend.avatarId), size = 38.dp)
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
-                                .size(14.dp)
+                                .size(11.dp)
                                 .background(
                                     color = if (friend.presenceStatus == "watching")
                                         NeonCyberCyan else NeonToxicGreen,
                                     shape = CircleShape
                                 )
-                                .border(2.dp, Color(0xFF0D1019), CircleShape)
+                                .border(1.5.dp, Color(0xFF0D1019), CircleShape)
                         )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         friend.username,
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 9.5.sp,
                         fontWeight = FontWeight.Medium,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         maxLines = 1
@@ -605,79 +645,115 @@ private fun OnlineFriendsRow(friends: List<FriendProfile>, onClick: () -> Unit) 
 }
 
 @Composable
-private fun ContinueWatchingRow(entries: List<ContinueWatchingEntry>, onResume: (ContinueWatchingEntry) -> Unit) {
-    Column(modifier = Modifier.padding(top = 20.dp)) {
+private fun ContinueWatchingRow(
+    entries: List<ContinueWatchingEntry>,
+    onResume: (ContinueWatchingEntry) -> Unit,
+    onDismiss: ((ContinueWatchingEntry) -> Unit)? = null
+) {
+    Column(modifier = Modifier.padding(top = 4.dp)) {
         Row(
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(6.dp)
                     .background(NeonHazardAmber, CircleShape)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 "CONTINUE WATCHING",
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                letterSpacing = 1.2.sp
+                letterSpacing = 1.sp
             )
         }
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(entries, key = { it.roomCode }) { entry ->
-                FuturisticGlassCard(
+                Surface(
                     modifier = Modifier
-                        .width(190.dp)
+                        .width(136.dp)
+                        .height(46.dp)
                         .bouncyClick { onResume(entry) },
-                    borderColors = listOf(NeonCrimson.copy(alpha = 0.7f), NeonCyberCyan.copy(alpha = 0.7f))
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xEE0B0E18),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                NeonCrimson.copy(alpha = 0.8f),
+                                NeonCyberCyan.copy(alpha = 0.55f)
+                            )
+                        )
+                    )
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Compact glowing play button circle
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(80.dp)
-                                .background(Color(0xFF080B14)),
+                                .size(24.dp)
+                                .background(Color(0x33FF1744), CircleShape)
+                                .border(1.dp, NeonCrimson, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .background(Color(0x33FF1744), CircleShape)
-                                    .border(1.5.dp, NeonCrimson, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = "Resume",
-                                    tint = NeonCrimson,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = "Resume",
+                                tint = NeonCrimson,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
-                        Column(modifier = Modifier.padding(12.dp)) {
+
+                        Spacer(modifier = Modifier.width(7.dp))
+
+                        // Compact Room code & source
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.Center
+                        ) {
                             Text(
-                                "ROOM: ${entry.roomCode}",
+                                text = "ROOM: ${entry.roomCode}",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
+                                fontSize = 10.5.sp,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                 maxLines = 1
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                             Text(
-                                if (entry.isYouTube) "YOUTUBE" else "WEB VIDEO",
-                                fontSize = 10.sp,
+                                text = if (entry.isYouTube) "YOUTUBE" else "WEB VIDEO",
+                                fontSize = 8.5.sp,
                                 color = NeonCyberCyan,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                maxLines = 1
                             )
+                        }
+
+                        if (onDismiss != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .bouncyClick { onDismiss(entry) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Remove",
+                                    tint = Color(0xFF6B7280),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
                         }
                     }
                 }

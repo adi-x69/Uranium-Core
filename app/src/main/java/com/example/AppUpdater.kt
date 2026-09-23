@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Warning
@@ -46,6 +48,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+
+const val SIGNATURE_MISMATCH_EXPLANATION =
+    "This update can't install over your current app because it was signed differently. Please uninstall the current app, then install this update fresh. Your account and data are safe — everything is stored online, not on this device."
 
 data class AppUpdateInfo(
     val latestVersionCode: Int = 0,
@@ -60,6 +66,10 @@ sealed class DownloadState {
     data class Downloading(val progress: Float, val downloadedBytes: Long, val totalBytes: Long) : DownloadState()
     data class ReadyToInstall(val apkFile: File) : DownloadState()
     data class Error(val message: String) : DownloadState()
+    data class SignatureMismatch(
+        val message: String = SIGNATURE_MISMATCH_EXPLANATION,
+        val apkFile: File? = null
+    ) : DownloadState()
 }
 
 // Firebase Realtime Database node that holds the latest-release info.
@@ -225,10 +235,21 @@ fun AppUpdateChecker(content: @Composable () -> Unit) {
                         return@withContext
                     }
 
+                    // Proactively detect signature mismatch before even attempting install
+                    if (checkSignatureMismatch(context, outputFile)) {
+                        downloadState = DownloadState.SignatureMismatch(
+                            message = SIGNATURE_MISMATCH_EXPLANATION,
+                            apkFile = outputFile
+                        )
+                        return@withContext
+                    }
+
                     downloadState = DownloadState.ReadyToInstall(outputFile)
                     // Automatically trigger installer once downloaded
                     withContext(Dispatchers.Main) {
-                        installApk(context, outputFile)
+                        installApk(context, outputFile) { explanation ->
+                            downloadState = DownloadState.SignatureMismatch(explanation, outputFile)
+                        }
                     }
                 } catch (e: Exception) {
                     downloadState = DownloadState.Error(e.localizedMessage ?: "Download failed. Please check internet.")
@@ -250,14 +271,136 @@ fun AppUpdateChecker(content: @Composable () -> Unit) {
                 info = info,
                 downloadState = downloadState,
                 onStartDownload = { startDownload(info.apkUrl) },
-                onInstallNow = { file -> installApk(context, file) }
+                onInstallNow = { file ->
+                    installApk(context, file) { explanation ->
+                        downloadState = DownloadState.SignatureMismatch(explanation, file)
+                    }
+                }
             )
         }
     }
 }
 
-fun installApk(context: Context, apkFile: File) {
+@Suppress("DEPRECATION")
+fun getApkSignatures(context: Context, apkFile: File): List<ByteArray>? {
+    if (!apkFile.exists()) return null
+    val pm = context.packageManager
+    val path = apkFile.absolutePath
+
+    // 1. Try with GET_SIGNING_CERTIFICATES on Android P (API 28)+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        try {
+            val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
+            val pi = pm.getPackageArchiveInfo(path, flags)
+            val signingInfo = pi?.signingInfo
+            if (signingInfo != null) {
+                val certs = if (signingInfo.hasMultipleSigners()) {
+                    signingInfo.apkContentsSigners
+                } else {
+                    signingInfo.signingCertificateHistory
+                }
+                if (!certs.isNullOrEmpty()) {
+                    return certs.map { it.toByteArray() }
+                }
+            }
+            val sigs = pi?.signatures
+            if (!sigs.isNullOrEmpty()) {
+                return sigs.map { it.toByteArray() }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    // 2. Legacy / fallback with GET_SIGNATURES
+    try {
+        val pi = pm.getPackageArchiveInfo(path, PackageManager.GET_SIGNATURES)
+        val sigs = pi?.signatures
+        if (!sigs.isNullOrEmpty()) {
+            return sigs.map { it.toByteArray() }
+        }
+    } catch (_: Throwable) {}
+
+    return null
+}
+
+@Suppress("DEPRECATION")
+fun getInstalledAppSignatures(context: Context): List<ByteArray>? {
+    val pm = context.packageManager
+    val pkgName = context.packageName
+
+    // 1. Try with GET_SIGNING_CERTIFICATES on Android P (API 28)+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        try {
+            val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
+            val pi = pm.getPackageInfo(pkgName, flags)
+            val signingInfo = pi.signingInfo
+            if (signingInfo != null) {
+                val certs = if (signingInfo.hasMultipleSigners()) {
+                    signingInfo.apkContentsSigners
+                } else {
+                    signingInfo.signingCertificateHistory
+                }
+                if (!certs.isNullOrEmpty()) {
+                    return certs.map { it.toByteArray() }
+                }
+            }
+            val sigs = pi.signatures
+            if (!sigs.isNullOrEmpty()) {
+                return sigs.map { it.toByteArray() }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    try {
+        val pi = pm.getPackageInfo(pkgName, PackageManager.GET_SIGNATURES)
+        val sigs = pi.signatures
+        if (!sigs.isNullOrEmpty()) {
+            return sigs.map { it.toByteArray() }
+        }
+    } catch (_: Throwable) {}
+
+    return null
+}
+
+private fun sha256Fingerprint(bytes: ByteArray): String {
+    return try {
+        val md = MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(bytes)
+        digest.joinToString("") { "%02x".format(it) }
+    } catch (_: Exception) {
+        bytes.contentHashCode().toString()
+    }
+}
+
+fun checkSignatureMismatch(context: Context, apkFile: File): Boolean {
+    val installed = getInstalledAppSignatures(context) ?: return false
+    val apk = getApkSignatures(context, apkFile) ?: return false
+
+    if (installed.isEmpty() || apk.isEmpty()) return false
+
+    val installedFingerprints = installed.map { sha256Fingerprint(it) }.toSet()
+    val apkFingerprints = apk.map { sha256Fingerprint(it) }.toSet()
+
+    // If there is ANY overlap, signatures match (e.g. key rotation or identical cert)
+    val hasMatch = installedFingerprints.any { it in apkFingerprints }
+    return !hasMatch
+}
+
+fun installApk(
+    context: Context,
+    apkFile: File,
+    onSignatureMismatch: ((String) -> Unit)? = null
+) {
     if (!apkFile.exists()) return
+
+    // Proactively verify signatures before attempting install to prevent silent failure
+    if (checkSignatureMismatch(context, apkFile)) {
+        if (onSignatureMismatch != null) {
+            onSignatureMismatch(SIGNATURE_MISMATCH_EXPLANATION)
+        } else {
+            android.widget.Toast.makeText(context, SIGNATURE_MISMATCH_EXPLANATION, android.widget.Toast.LENGTH_LONG).show()
+        }
+        return
+    }
 
     // Check if permission to install unknown apps is granted on Android 8.0+
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -282,7 +425,20 @@ fun installApk(context: Context, apkFile: File) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    context.startActivity(installIntent)
+
+    try {
+        context.startActivity(installIntent)
+    } catch (e: Exception) {
+        if (checkSignatureMismatch(context, apkFile)) {
+            onSignatureMismatch?.invoke(SIGNATURE_MISMATCH_EXPLANATION)
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Unable to open installer: ${e.localizedMessage ?: "Unknown error"}",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 }
 
 @Composable
@@ -549,6 +705,93 @@ fun ForcedUpdateDialog(
                                     shape = RoundedCornerShape(14.dp)
                                 ) {
                                     Text("Retry Download", fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+
+                        is DownloadState.SignatureMismatch -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f))
+                                        .padding(12.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = downloadState.message,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        textAlign = TextAlign.Start,
+                                        lineHeight = 18.sp
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
+
+                                Button(
+                                    onClick = {
+                                        val uninstallIntent = Intent(Intent.ACTION_DELETE).apply {
+                                            data = Uri.parse("package:${context.packageName}")
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(uninstallIntent)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Uninstall Current App", fontWeight = FontWeight.SemiBold)
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        try {
+                                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(info.apkUrl)).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(browserIntent)
+                                        } catch (_: Exception) {}
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(44.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Download APK in Browser", style = MaterialTheme.typography.bodyMedium)
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                TextButton(onClick = onStartDownload) {
+                                    Text(
+                                        "Retry Download",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
                                 }
                             }
                         }
