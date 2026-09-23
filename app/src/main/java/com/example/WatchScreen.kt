@@ -2118,7 +2118,7 @@ private fun QuickEmojiBar(
     modifier: Modifier = Modifier
 ) {
     val emojis = remember {
-        listOf("🔥", "😂", "🍿", "❤️", "💀", "🚀", "⚡", "😱", "🎉", "👀", "👏", "🤯")
+        listOf("😁","🤣","🫪","😋","🤪","🤭","😚","🥰","🫰🏻","💋","🖕🏻","🤡","👽","🌚"
     }
 
     Row(
