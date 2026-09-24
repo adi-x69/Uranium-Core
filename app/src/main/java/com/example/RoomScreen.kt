@@ -516,5 +516,11 @@ private fun ReactorRoomHero(
                 .size(w * 0.2635f, h * 0.0558f)
                 .clickable(onClick = onPlayWeb)
         )
+        Box(
+            modifier = Modifier
+            .offset(x = w * 0.7126f, y = h * 0.2762f)
+            .size(w * 0.2635f, h * 0.0558f)
+            .clickable(onClick = onPlayWeb)
+          )
     }
 }
