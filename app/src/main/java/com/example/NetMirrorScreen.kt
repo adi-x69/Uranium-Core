@@ -13,36 +13,62 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.example.ui.theme.AbyssOutline
+import com.example.ui.theme.AbyssSurfaceElevated
+import com.example.ui.theme.BodyFontFamily
+import com.example.ui.theme.CyanCore
+import com.example.ui.theme.DisplayFontFamily
+import com.example.ui.theme.MistText
+import com.example.ui.theme.MistTextMuted
+import com.example.ui.theme.VioletGlow
+import com.example.ui.theme.VoidBlack
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val NETMIRROR_HOME = "https://netmirror.studio/"
+
+// Web watch limit: after this many seconds of continuous playback the "watch in the app" popup shows.
+private const val WEB_WATCH_LIMIT_SECONDS = 120
+// A seek resets the timer, but more than this many seeks also shows the popup.
+private const val WEB_MAX_SEEKS = 5
+
+private enum class WebLimitReason { TIME, SEEKS }
 
 private val BLOCKED_DOMAINS = listOf(
     "doubleclick.net", "googlesyndication.com", "googleadservices.com",
@@ -96,6 +122,175 @@ private const val DETECT_SCRIPT = """
   });
 })();
 """
+
+/**
+ * Renames "NetMirror" to "UraniumTV" in everything the user can see: page text, tab title,
+ * and alt/title/placeholder texts. It keeps watching, so content the site loads later is
+ * renamed too. Web addresses and handles (like netmirror.studio or t.me/netmirror_web) are
+ * skipped on purpose - changing their text would not change where they point.
+ */
+private const val BRAND_SCRIPT = """
+(function () {
+  if (window.__nmBrand) return;
+  window.__nmBrand = true;
+  var NAME = 'UraniumTV';
+  var RE = /(?<![\w@\/.-])net ?mirror(?![\w@\/-]|\.[a-z])/gi;
+  var HAS = /net ?mirror/i;
+  var SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1, CODE: 1 };
+  var ATTRS = ['alt', 'title', 'placeholder', 'aria-label'];
+
+  function fixText(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var parent = node.parentNode;
+      if (!parent || SKIP[parent.nodeName]) continue;
+      var v = node.nodeValue;
+      if (v && HAS.test(v)) {
+        var nv = v.replace(RE, NAME);
+        if (nv !== v) node.nodeValue = nv;
+      }
+    }
+  }
+
+  function fixAttrs(root) {
+    root.querySelectorAll('[alt],[title],[placeholder],[aria-label]').forEach(function (el) {
+      ATTRS.forEach(function (a) {
+        var v = el.getAttribute(a);
+        if (v && HAS.test(v)) {
+          var nv = v.replace(RE, NAME);
+          if (nv !== v) el.setAttribute(a, nv);
+        }
+      });
+    });
+  }
+
+  function fixAll() {
+    var root = document.documentElement;
+    if (!root) return;
+    fixText(root);
+    fixAttrs(root);
+    if (document.title && HAS.test(document.title)) {
+      document.title = document.title.replace(RE, NAME);
+    }
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function () { pending = false; fixAll(); });
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, {
+    childList: true, subtree: true, characterData: true
+  });
+  document.addEventListener('DOMContentLoaded', fixAll);
+  window.addEventListener('load', fixAll);
+  fixAll();
+})();
+"""
+
+/**
+ * Removes the site's "Join our Telegram" promo popup. It finds the promo by its text, climbs to the
+ * floating box around it and hides that box. Normal page content is never hidden: only floating
+ * (fixed / absolute) boxes with very little text are removed.
+ */
+private const val CLEAN_SCRIPT = """
+(function () {
+  if (window.__nmClean) return;
+  window.__nmClean = true;
+  var TG = /join our telegram|t\.me\/|telegram\.me\//i;
+  var SKIP = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1 };
+
+  function hideTelegramPromo() {
+    var root = document.documentElement;
+    if (!root) return;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var el = node.parentElement;
+      if (!el || SKIP[el.nodeName] || !TG.test(node.nodeValue || '')) continue;
+      var box = el;
+      for (var i = 0; i < 10 && box && box !== document.body && box !== document.documentElement; i++) {
+        var pos = window.getComputedStyle(box).position;
+        if (pos === 'fixed' || pos === 'absolute' || pos === 'sticky') {
+          if (((box.innerText || '').length) < 400) box.style.setProperty('display', 'none', 'important');
+          break;
+        }
+        box = box.parentElement;
+      }
+    }
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    setTimeout(function () { pending = false; hideTelegramPromo(); }, 400);
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', hideTelegramPromo);
+  window.addEventListener('load', hideTelegramPromo);
+  hideTelegramPromo();
+})();
+"""
+
+/**
+ * Watch-limit sensor. It only REPORTS to the app (the app keeps the counters, so reloading the page
+ * does not reset them):
+ *  - onWebPlayTick(): once per second while a video is really playing
+ *  - onWebSeek():     when the viewer skips/scrubs (one scrub = one seek; small jumps and jumps
+ *                     the site makes itself while loading or switching quality are ignored)
+ * While the popup is showing, the app answers isBlocked() = true and the video is kept paused.
+ */
+private const val LIMIT_SCRIPT = """
+(function () {
+  if (window.__nmLimit) return;
+  window.__nmLimit = true;
+  var lastTime = new WeakMap();
+  var lastSeekAt = 0;
+
+  function attach(v) {
+    if (v.__nmLim) return;
+    v.__nmLim = true;
+    lastTime.set(v, v.currentTime || 0);
+    v.__nmIgnore = Date.now() + 4000;
+    v.addEventListener('loadstart', function () { v.__nmIgnore = Date.now() + 4000; });
+    v.addEventListener('emptied', function () { v.__nmIgnore = Date.now() + 4000; });
+    v.addEventListener('timeupdate', function () { if (!v.seeking) lastTime.set(v, v.currentTime); });
+    v.addEventListener('seeking', function () {
+      var prev = lastTime.get(v) || 0;
+      var cur = v.currentTime || 0;
+      lastTime.set(v, cur);
+      if (Date.now() < (v.__nmIgnore || 0)) return;   // jump made by the site itself
+      if (Math.abs(cur - prev) < 2) return;            // tiny correction, not a real skip
+      var now = Date.now();
+      var newScrub = now - lastSeekAt > 1200;          // dragging the bar = one seek
+      lastSeekAt = now;
+      if (newScrub) { try { window.AndroidBridge.onWebSeek(); } catch (e) {} }
+    });
+  }
+
+  setInterval(function () {
+    var bridge = window.AndroidBridge;
+    if (!bridge) return;
+    var blocked = false;
+    try { blocked = bridge.isBlocked(); } catch (e) {}
+    var playing = false;
+    document.querySelectorAll('video').forEach(function (v) {
+      attach(v);
+      if (blocked) { if (!v.paused) v.pause(); return; }
+      if (v.duration > 60 && !v.paused && !v.ended && !v.seeking && v.readyState > 2) playing = true;
+    });
+    if (playing) { try { bridge.onWebPlayTick(); } catch (e) {} }
+  }, 1000);
+})();
+"""
+
+// Everything that must run as early as possible on every page.
+private const val START_SCRIPT = DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + LIMIT_SCRIPT
 
 // Page helper: hides "extension not enabled" warnings, unlocks download buttons, and reports
 // the video that is loaded in the player together with its real size (width x height).
@@ -256,6 +451,42 @@ fun NetMirrorScreen(
         WindowCompat.getInsetsController(act.window, decor).show(WindowInsetsCompat.Type.systemBars())
     }
 
+    // ---- Web watch limit (counters live here, so reloading the page cannot reset them) ----
+    var watchedSeconds by remember { mutableStateOf(0) }
+    var seekCount by remember { mutableStateOf(0) }
+    var limitReason by remember { mutableStateOf<WebLimitReason?>(null) }
+    val limitBlocked = remember { AtomicBoolean(false) } // read by the JS bridge from another thread
+
+    fun triggerLimit(reason: WebLimitReason) {
+        if (limitReason != null) return
+        watchedSeconds = 0
+        seekCount = 0
+        limitBlocked.set(true)
+        webView?.evaluateJavascript(
+            "document.querySelectorAll('video').forEach(function(v){v.pause();});", null
+        )
+        if (customView != null) exitFullscreen() // so the popup sits on the normal screen
+        limitReason = reason
+    }
+
+    fun onPlayTick() {
+        if (limitReason != null) return
+        watchedSeconds += 1
+        if (watchedSeconds >= WEB_WATCH_LIMIT_SECONDS) triggerLimit(WebLimitReason.TIME)
+    }
+
+    fun onSeekEvent() {
+        if (limitReason != null) return
+        watchedSeconds = 0 // a seek resets the 2-minute timer...
+        seekCount += 1
+        if (seekCount > WEB_MAX_SEEKS) triggerLimit(WebLimitReason.SEEKS) // ...but too many seeks show the popup
+    }
+
+    fun dismissLimit() {
+        limitReason = null
+        limitBlocked.set(false)
+    }
+
     BackHandler {
         when {
             customView != null -> exitFullscreen()
@@ -298,7 +529,7 @@ fun NetMirrorScreen(
                     }
 
                     Text(
-                        text = "NetMirror",
+                        text = "UraniumTV",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp,
@@ -424,6 +655,19 @@ fun NetMirrorScreen(
                         fun onVideoPlaying(url: String, width: Int, height: Int) {
                             post { onVideoPlayingFound(url, width, height) }
                         }
+
+                        @JavascriptInterface
+                        fun onWebPlayTick() {
+                            post { onPlayTick() }
+                        }
+
+                        @JavascriptInterface
+                        fun onWebSeek() {
+                            post { onSeekEvent() }
+                        }
+
+                        @JavascriptInterface
+                        fun isBlocked(): Boolean = limitBlocked.get()
                     }, "AndroidBridge")
 
                     CookieManager.getInstance().setAcceptCookie(true)
@@ -451,7 +695,7 @@ fun NetMirrorScreen(
 
                     // Extension's content.js reply - runs before the page's own scripts.
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                        WebViewCompat.addDocumentStartJavaScript(this, DETECT_SCRIPT, setOf("*"))
+                        WebViewCompat.addDocumentStartJavaScript(this, START_SCRIPT, setOf("*"))
                     }
 
                     webChromeClient = object : WebChromeClient() {
@@ -499,7 +743,7 @@ fun NetMirrorScreen(
                             isLoading = true
                             canGoBack = view?.canGoBack() == true
                             // Fallback for WebViews without document-start scripts.
-                            view?.evaluateJavascript(DETECT_SCRIPT, null)
+                            view?.evaluateJavascript(START_SCRIPT, null)
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
@@ -562,6 +806,149 @@ fun NetMirrorScreen(
                 .fillMaxSize()
                 .weight(1f)
         )
+    }
+
+    limitReason?.let { reason ->
+        WatchInAppDialog(
+            reason = reason,
+            onWatchInApp = {
+                val link = capturedLinks.firstOrNull { it.key == selectedKey } ?: capturedLinks.firstOrNull()
+                dismissLimit()
+                if (link != null) {
+                    onDirectLinkFound(link.url)
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Please play the video for a moment so we can prepare it for the app.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            },
+            onLater = { dismissLimit() }
+        )
+    }
+}
+
+/** The "continue in the app" popup, styled with the UraniumTV theme. */
+@Composable
+private fun WatchInAppDialog(
+    reason: WebLimitReason,
+    onWatchInApp: () -> Unit,
+    onLater: () -> Unit
+) {
+    val message = when (reason) {
+        WebLimitReason.TIME ->
+            "You've been watching for 2 minutes on the web. To enjoy the full video with smooth " +
+                "playback and the best quality, please continue in the UraniumTV app."
+        WebLimitReason.SEEKS ->
+            "It looks like you're skipping around quite a bit. For the most comfortable way to " +
+                "watch the full video, please continue in the UraniumTV app."
+    }
+    val shape = RoundedCornerShape(28.dp)
+
+    Dialog(
+        onDismissRequest = onLater,
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 360.dp)
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(AbyssSurfaceElevated)
+                    .border(1.dp, AbyssOutline, shape)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Glowing play badge
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .background(
+                            Brush.radialGradient(listOf(CyanCore.copy(alpha = 0.30f), Color.Transparent)),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(68.dp)
+                            .background(Brush.linearGradient(listOf(CyanCore, VioletGlow)), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = VoidBlack,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(18.dp))
+
+                Text(
+                    text = "Keep watching in the app",
+                    color = MistText,
+                    fontFamily = DisplayFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                Text(
+                    text = message,
+                    color = MistTextMuted,
+                    fontFamily = BodyFontFamily,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                // Primary button
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Brush.horizontalGradient(listOf(CyanCore, VioletGlow)))
+                        .clickable(onClick = onWatchInApp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Watch in App",
+                        color = VoidBlack,
+                        fontFamily = DisplayFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+
+                Spacer(Modifier.height(6.dp))
+
+                TextButton(onClick = onLater, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Maybe later",
+                        color = MistTextMuted,
+                        fontFamily = BodyFontFamily,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        }
     }
 }
 
