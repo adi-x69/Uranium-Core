@@ -115,6 +115,7 @@ dependencies {
   implementation("com.google.firebase:firebase-database")
   implementation("androidx.media3:media3-exoplayer:1.3.1")
   implementation("androidx.media3:media3-ui:1.3.1")
+  implementation("androidx.webkit:webkit:1.11.0")
   implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.1")
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
