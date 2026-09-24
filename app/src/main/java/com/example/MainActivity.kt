@@ -319,8 +319,17 @@ fun UraniumTvApp() {
                 }
             )
         }
-    }
-}
+        composable("netmirror") {
+            NetMirrorScreen(
+                onDirectLinkFound = { directLink ->
+                    Toast.makeText(context, "Link captured:\n$directLink", Toast.LENGTH_LONG).show()
+                },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }   // ← This closes the composable("netmirror")
+
+    }       // ← This closes the NavHost
+}           // ← This closes UraniumTvApp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
