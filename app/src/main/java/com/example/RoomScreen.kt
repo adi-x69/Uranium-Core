@@ -60,12 +60,9 @@ fun getYoutubeVideoId(url: String): String? {
 fun RoomScreen(
     roomCode: String,
     onNavigateBack: () -> Unit,
-    onNavigateToSearch: () -> Unit,
     onInviteFriends: () -> Unit,
     onNavigateToWatch: () -> Unit,
     onNavigateToNetMirror: () -> Unit,          // ← New parameter
-    selectedVideoIdFromSearch: String?,
-    onVideoIdConsumed: () -> Unit
 ) {
     val context = LocalContext.current
     val auth = remember { FirebaseAuth.getInstance() }
@@ -155,26 +152,6 @@ fun RoomScreen(
         onDispose { presenceRootRef.removeEventListener(listener) }
     }
 
-    LaunchedEffect(selectedVideoIdFromSearch) {
-        if (selectedVideoIdFromSearch != null) {
-            val finalUrl = "https://www.youtube.com/watch?v=$selectedVideoIdFromSearch"
-            val updates = mapOf(
-                "videoUrl" to finalUrl,
-                "position" to 0L,
-                "isPlaying" to true,
-                "lastUpdatedBy" to uid,
-                "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-            )
-            db.updateChildren(updates)
-            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true, isNewVideo = true)
-            
-            hasVideo = true
-            
-            onVideoIdConsumed()
-            onNavigateToWatch()
-        }
-    }
-
     DisposableEffect(roomCode) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -230,7 +207,6 @@ fun RoomScreen(
                     webInputUrl = webInputUrl,
                     onWebInputChange = { webInputUrl = it },
                     onNavigateBack = onNavigateBack,
-                    onNavigateToSearch = onNavigateToSearch,
                     onInviteFriends = onInviteFriends,
                     onPlayYt = {
                         val clean = ytInputUrl.trim()
@@ -321,7 +297,6 @@ private fun ReactorRoomHero(
     webInputUrl: String,
     onWebInputChange: (String) -> Unit,
     onNavigateBack: () -> Unit,
-    onNavigateToSearch: () -> Unit,
     onInviteFriends: () -> Unit,
     onPlayYt: () -> Unit,
     onPlayWeb: () -> Unit,
@@ -389,13 +364,6 @@ private fun ReactorRoomHero(
                 .offset(x = w * 0.1258f, y = h * 0.0186f)
                 .size(w * 0.2814f, h * 0.0345f)
                 .wrapContentHeight(Alignment.CenterVertically)
-        )
-
-        Box(
-            modifier = Modifier
-                .offset(x = w * 0.0240f, y = h * 0.0664f)
-                .size(w * 0.9521f, h * 0.0611f)
-                .clickable(onClick = onNavigateToSearch)
         )
 
         Box(
