@@ -1,26 +1,25 @@
 package com.example
 
 import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.graphics.Bitmap
 import android.os.Message
 import android.webkit.*
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Modifier.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -55,26 +54,46 @@ fun NetMirrorScreen(
     )
 
     fun isVideoUrl(url: String): Boolean {
-    val lower = url.lowercase()
+        val lower = url.lowercase()
 
-    // Temporary debug filter - catches almost everything that could be video
-    return lower.contains(".m3u8") ||
-           lower.contains(".mp4") ||
-           lower.contains(".mkv") ||
-           lower.contains(".ts") ||
-           lower.contains("m3u8") ||
-           lower.contains("playlist") ||
-           lower.contains("manifest") ||
-           lower.contains("segment") ||
-           lower.contains("video") ||
-           lower.contains("stream") ||
-           lower.contains("media") ||
-           lower.contains("cdn") ||
-           lower.contains("hls") ||
-           lower.endsWith(".ts") ||
-           (lower.startsWith("http") && lower.length > 80) // long URLs often contain tokens
-           
-}
+        // Ignore obvious junk
+        if (lower.endsWith(".js") ||
+            lower.endsWith(".css") ||
+            lower.endsWith(".png") ||
+            lower.endsWith(".jpg") ||
+            lower.endsWith(".jpeg") ||
+            lower.endsWith(".gif") ||
+            lower.endsWith(".svg") ||
+            lower.endsWith(".woff") ||
+            lower.endsWith(".woff2") ||
+            lower.endsWith(".ttf") ||
+            lower.contains("analytics") ||
+            lower.contains("beacon") ||
+            lower.contains("google") ||
+            lower.contains("facebook") ||
+            lower.contains("doubleclick") ||
+            lower.contains("cloudflareinsights") ||
+            lower.contains("scorecardresearch")
+        ) {
+            return false
+        }
+
+        // Keep potentially useful URLs
+        return lower.contains(".m3u8") ||
+                lower.contains(".mp4") ||
+                lower.contains(".mkv") ||
+                lower.contains(".ts") ||
+                lower.contains("m3u8") ||
+                lower.contains("playlist") ||
+                lower.contains("manifest") ||
+                lower.contains("segment") ||
+                lower.contains("stream") ||
+                lower.contains("cdn") ||
+                lower.contains("proxy") ||
+                lower.contains("hls") ||
+                lower.contains("video") ||
+                (lower.startsWith("http") && lower.length > 100)
+    }
 
     fun addCapturedLink(url: String) {
         if (capturedLinks.any { it.equals(url, ignoreCase = true) }) return
@@ -83,35 +102,35 @@ fun NetMirrorScreen(
             .distinctBy { it.lowercase() }
             .sortedWith(
                 compareByDescending<String> { it.contains(".m3u8", ignoreCase = true) }
+                    .thenByDescending { it.contains(".mp4", ignoreCase = true) }
                     .thenByDescending { it.length }
             )
 
         capturedLinks = newList
+
         if (selectedLink == null) {
             selectedLink = newList.firstOrNull()
         }
-
-        Toast.makeText(context, "Captured: ${url.take(80)}...", Toast.LENGTH_LONG).show()
     }
 
     // ================= HEAVY JAVASCRIPT INJECTION =================
     val heavyInjectionScript = """
         (function() {
-            // ========== 1. Kill Extension Detection ==========
+            // Fake extension presence
             window.chrome = window.chrome || {};
             window.chrome.runtime = window.chrome.runtime || {};
             window.chrome.runtime.id = "fake-extension-id";
             window.chrome.runtime.getManifest = function() { return { name: "NetMirror Extension" }; };
             window.chrome.runtime.sendMessage = function() {};
-            window.chrome.runtime.connect = function() { return { onMessage: { addListener: function(){} } }; };
+            window.chrome.runtime.connect = function() { 
+                return { onMessage: { addListener: function(){} } }; 
+            };
 
-            // Fake extension presence
             Object.defineProperty(window, 'netmirrorExtension', {
                 value: true,
                 writable: false
             });
 
-            // ========== 2. Remove "Extension Not Enable" messages ==========
             function removeExtensionWarnings() {
                 const keywords = [
                     'extension not enable', 'extension not enabled',
@@ -128,14 +147,12 @@ fun NetMirrorScreen(
                     }
                 });
 
-                // Hide common warning containers
                 document.querySelectorAll('[class*="extension"], [id*="extension"], [class*="adblock"], [id*="adblock"]').forEach(el => {
                     el.style.display = 'none';
                     el.remove();
                 });
             }
 
-            // ========== 3. Force unlock Download buttons ==========
             function unlockDownloadButtons() {
                 document.querySelectorAll('button, a, div[role="button"]').forEach(btn => {
                     const text = (btn.innerText || '').toLowerCase();
@@ -149,18 +166,16 @@ fun NetMirrorScreen(
                 });
             }
 
-            // ========== 4. Extract video sources from player & DOM ==========
             function extractVideoSources() {
                 const sources = new Set();
 
-                // <video> and <source> tags
                 document.querySelectorAll('video, source').forEach(el => {
                     if (el.src) sources.add(el.src);
                     if (el.currentSrc) sources.add(el.currentSrc);
                 });
 
-                // Common player variables
                 if (window.player && window.player.src) sources.add(window.player.src);
+
                 if (window.jwplayer) {
                     try {
                         const jw = jwplayer();
@@ -173,34 +188,29 @@ fun NetMirrorScreen(
                     } catch(e) {}
                 }
 
-                // HLS.js / video.js
                 if (window.Hls && window.Hls.instances) {
                     window.Hls.instances.forEach(h => {
                         if (h.url) sources.add(h.url);
                     });
                 }
 
-                // Scan all scripts for m3u8/mp4
                 document.querySelectorAll('script').forEach(script => {
                     const content = script.textContent || '';
                     const matches = content.match(/(https?:\/\/[^\s"'`]+\.(m3u8|mp4|mkv)[^\s"'`]*)/gi);
                     if (matches) matches.forEach(m => sources.add(m));
                 });
 
-                // Send found links to Android
                 sources.forEach(url => {
-                    if (url && (url.includes('.m3u8') || url.includes('.mp4') || url.includes('.mkv'))) {
+                    if (url && (url.includes('.m3u8') || url.includes('.mp4') || url.includes('.mkv') || url.length > 80)) {
                         window.AndroidBridge.onVideoLinkFound(url);
                     }
                 });
             }
 
-            // ========== 5. Continuous monitoring ==========
             removeExtensionWarnings();
             unlockDownloadButtons();
             extractVideoSources();
 
-            // Run again after delays (site loads content dynamically)
             setTimeout(() => {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
@@ -219,7 +229,6 @@ fun NetMirrorScreen(
                 extractVideoSources();
             }, 6000);
 
-            // Observe DOM changes
             const observer = new MutationObserver(() => {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
@@ -281,8 +290,8 @@ fun NetMirrorScreen(
                     }
                 }
 
-                // Captured Link Action Bar
-                if (selectedLink != null) {
+                // ================= SCROLLABLE CAPTURED LINKS =================
+                if (capturedLinks.isNotEmpty()) {
                     Surface(
                         color = Color(0xFF1B5E20),
                         modifier = Modifier.fillMaxWidth()
@@ -293,36 +302,56 @@ fun NetMirrorScreen(
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
                             Text(
-                                text = "Direct Link Captured!",
+                                text = "Captured Links (${capturedLinks.size})",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
-                            Text(
-                                text = selectedLink!!,
-                                color = Color(0xFFB9F6CA),
-                                fontSize = 12.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-                            )
 
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 180.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                capturedLinks.forEachIndexed { index, link ->
+                                    val isSelected = link == selectedLink
+
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                if (isSelected) Color(0xFF2E7D32) else Color.Transparent,
+                                                shape = RoundedCornerShape(6.dp)
+                                            )
+                                            .clickable { selectedLink = link }
+                                            .padding(vertical = 6.dp, horizontal = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${index + 1}. \( {link.take(75)} \){if (link.length > 75) "..." else ""}",
+                                            color = if (isSelected) Color.White else Color(0xFFB9F6CA),
+                                            fontSize = 12.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            if (selectedLink != null) {
                                 Button(
                                     onClick = { onDirectLinkFound(selectedLink!!) },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(vertical = 10.dp)
                                 ) {
-                                    Text("USE LINK", fontWeight = FontWeight.Bold)
-                                }
-
-                                if (capturedLinks.size > 1) {
-                                    Text(
-                                        text = "${capturedLinks.size} links found",
-                                        color = Color(0xFFB9F6CA),
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.align(Alignment.CenterVertically)
-                                    )
+                                    Text("USE SELECTED LINK", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -344,7 +373,6 @@ fun NetMirrorScreen(
                 WebView(ctx).apply {
                     webView = this
 
-                    // Bridge so JavaScript can send links to Kotlin
                     addJavascriptInterface(object {
                         @JavascriptInterface
                         fun onVideoLinkFound(url: String) {
@@ -371,7 +399,6 @@ fun NetMirrorScreen(
                         allowFileAccess = false
                         allowContentAccess = false
                         cacheMode = WebSettings.LOAD_DEFAULT
-                        // Important for some players
                         javaScriptCanOpenWindowsAutomatically = false
                     }
 
@@ -398,8 +425,6 @@ fun NetMirrorScreen(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             isLoading = false
                             canGoBack = view?.canGoBack() == true
-
-                            // Inject the heavy script
                             view?.evaluateJavascript(heavyInjectionScript, null)
                         }
 
@@ -426,14 +451,12 @@ fun NetMirrorScreen(
                         ): WebResourceResponse? {
                             val url = request?.url?.toString() ?: return null
 
-                            // Block ads
                             if (blockedDomains.any { domain ->
                                     url.contains(domain, ignoreCase = true)
                                 }) {
                                 return WebResourceResponse("text/plain", "utf-8", null)
                             }
 
-                            // Capture video links from network
                             if (isVideoUrl(url)) {
                                 view?.post {
                                     addCapturedLink(url)
