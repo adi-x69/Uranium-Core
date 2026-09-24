@@ -263,8 +263,9 @@ fun UraniumTvApp() {
                 onNavigateToFriends = {
                     navController.navigate("friends")
                 },
-                onNavigateToWatch = { roomCode ->
-                    navController.navigate("watch/$roomCode")
+                onNavigateToWatch = { roomCode, isYouTube ->
+                    if (isYouTube) navController.navigate("ytwatch/$roomCode")
+                    else navController.navigate("watch/$roomCode")
                 },
                 onNavigateToProfile = {
                     navController.navigate("profile")
@@ -308,14 +309,28 @@ fun UraniumTvApp() {
                 roomCode = roomCode,
                 onNavigateBack = { navController.popBackStack() },
                 onInviteFriends = { navController.navigate("friends?roomCode=$roomCode") },
-                onNavigateToWatch = { navController.navigate("watch/$roomCode") },
+                onNavigateToWatch = { isYouTube ->
+                    if (isYouTube) navController.navigate("ytwatch/$roomCode")
+                    else navController.navigate("watch/$roomCode")
+                },
                 onNavigateToNetMirror = { navController.navigate("netmirror/$roomCode") },
             )
         }
 
+        // Direct-link / NetMirror playback — unchanged.
         composable("watch/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
             WatchScreen(
+                roomCode = roomCode,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        // YouTube-only playback — same room UI (chat, reactions, sync) plus the
+        // read-only auto-quality badge.
+        composable("ytwatch/{roomCode}") { backStackEntry ->
+            val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
+            YouTubeWatchScreen(
                 roomCode = roomCode,
                 onNavigateBack = { navController.popBackStack() }
             )
