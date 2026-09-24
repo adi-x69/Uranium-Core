@@ -126,11 +126,11 @@ import java.util.Date
 import java.util.Locale
 
 // The reaction set for quick chat reactions and bursts.
-val REACTION_EMOJIS = listOf(
+val YT_REACTION_EMOJIS = listOf(
     "😁", "🤣", "🫪", "😋", "🤪", "🤭", "😚", "🥰", "🫰🏻", "💋", "🖕🏻", "🤡", "👽", "🌚"
 )
 
-private data class ChatMessage(
+private data class YtChatMessage(
     val id: String,
     val senderUid: String,
     val senderUsername: String,
@@ -140,7 +140,7 @@ private data class ChatMessage(
 )
 
 /** In-app popup notification data for incoming chat messages in fullscreen watch mode. */
-private data class ChatNotification(
+private data class YtChatNotification(
     val id: String,
     val senderUid: String,
     val senderUsername: String,
@@ -149,16 +149,16 @@ private data class ChatNotification(
     val timestamp: Long
 )
 
-private data class FloatingReaction(val key: String, val emoji: String, val startX: Float)
+private data class YtFloatingReaction(val key: String, val emoji: String, val startX: Float)
 
 /** Someone currently present in the room, from rooms/{roomCode}/participants/{uid}. */
-private data class ParticipantInfo(val uid: String, val username: String, val avatarId: String)
+private data class YtParticipantInfo(val uid: String, val username: String, val avatarId: String)
 
 /** A transient "X joined" / "X left" banner shown over the video. */
-private data class BannerEntry(val key: String, val text: String)
+private data class YtBannerEntry(val key: String, val text: String)
 
 /** A transient play/pause notification banner shown over the video. */
-private data class PlaybackBannerEntry(val key: String, val text: String, val isPlaying: Boolean)
+private data class YtPlaybackBannerEntry(val key: String, val text: String, val isPlaying: Boolean)
 
 private fun watchDbRef(roomCode: String) = FirebaseDatabase
     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
@@ -218,9 +218,9 @@ fun YouTubeWatchScreen(
         }
     }
 
-    var participants by remember { mutableStateOf<List<ParticipantInfo>>(emptyList()) }
-    val joinLeaveBanners = remember { mutableStateListOf<BannerEntry>() }
-    val playbackBanners = remember { mutableStateListOf<PlaybackBannerEntry>() }
+    var participants by remember { mutableStateOf<List<YtParticipantInfo>>(emptyList()) }
+    val joinLeaveBanners = remember { mutableStateListOf<YtBannerEntry>() }
+    val playbackBanners = remember { mutableStateListOf<YtPlaybackBannerEntry>() }
 
     DisposableEffect(roomCode) {
         val participantsRef = db.child("participants")
@@ -229,23 +229,23 @@ fun YouTubeWatchScreen(
                 val pid = snapshot.key ?: return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
                 val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "iron_man"
-                participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
+                participants = participants.filter { it.uid != pid } + YtParticipantInfo(pid, username, avatarId)
                 if (pid != uid) {
-                    joinLeaveBanners.add(BannerEntry("join-$pid-${System.nanoTime()}", "$username joined"))
+                    joinLeaveBanners.add(YtBannerEntry("join-$pid-${System.nanoTime()}", "$username joined"))
                 }
             }
             override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {
                 val pid = snapshot.key ?: return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
                 val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "iron_man"
-                participants = participants.filter { it.uid != pid } + ParticipantInfo(pid, username, avatarId)
+                participants = participants.filter { it.uid != pid } + YtParticipantInfo(pid, username, avatarId)
             }
             override fun onChildRemoved(snapshot: DataSnapshot) {
                 val pid = snapshot.key ?: return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
                 participants = participants.filter { it.uid != pid }
                 if (pid != uid) {
-                    joinLeaveBanners.add(BannerEntry("leave-$pid-${System.nanoTime()}", "$username left"))
+                    joinLeaveBanners.add(YtBannerEntry("leave-$pid-${System.nanoTime()}", "$username left"))
                 }
             }
             override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
@@ -543,7 +543,7 @@ fun YouTubeWatchScreen(
                 if (!isSelfEcho && prevRoomPlaying != null && prevRoomPlaying != isPlaying && lastUpdatedBy.isNotEmpty()) {
                     val actorName = participants.find { it.uid == lastUpdatedBy }?.username ?: "Someone"
                     val actionText = if (isPlaying) "$actorName played the video" else "$actorName paused the video"
-                    playbackBanners.add(PlaybackBannerEntry("playstate-${System.nanoTime()}", actionText, isPlaying))
+                    playbackBanners.add(YtPlaybackBannerEntry("playstate-${System.nanoTime()}", actionText, isPlaying))
                 }
                 prevRoomPlaying = isPlaying
 
@@ -681,10 +681,10 @@ fun YouTubeWatchScreen(
     }
 
     // ---- Chat ----
-    val chatMessages = remember { mutableStateListOf<ChatMessage>() }
+    val chatMessages = remember { mutableStateListOf<YtChatMessage>() }
     val chatListState = rememberLazyListState()
     var chatInput by remember { mutableStateOf("") }
-    var activeChatNotification by remember { mutableStateOf<ChatNotification?>(null) }
+    var activeChatNotification by remember { mutableStateOf<YtChatNotification?>(null) }
     val screenOpenedAt = remember { System.currentTimeMillis() }
     var isInitialChatSyncComplete by remember { mutableStateOf(false) }
 
@@ -727,7 +727,7 @@ fun YouTubeWatchScreen(
                     ?: participants.firstOrNull { it.uid == senderUid }?.avatarId
                     ?: UserProfileStorage.getCachedAvatar(context, senderUid).ifEmpty { "iron_man" }
 
-                val msg = ChatMessage(
+                val msg = YtChatMessage(
                     id = id,
                     senderUid = senderUid,
                     senderUsername = senderUsername,
@@ -743,7 +743,7 @@ fun YouTubeWatchScreen(
                 // - Chat mode is currently closed (isChatMode == false)
                 val isLiveMessage = isInitialChatSyncComplete && (timestamp <= 0L || timestamp >= screenOpenedAt - 5000L)
                 if (isLiveMessage && senderUid != uid && !isChatMode && text.isNotBlank()) {
-                    activeChatNotification = ChatNotification(
+                    activeChatNotification = YtChatNotification(
                         id = id,
                         senderUid = senderUid,
                         senderUsername = senderUsername,
@@ -818,7 +818,7 @@ fun YouTubeWatchScreen(
     }
 
     // ---- Emoji reactions ----
-    val floatingReactions = remember { mutableStateListOf<FloatingReaction>() }
+    val floatingReactions = remember { mutableStateListOf<YtFloatingReaction>() }
 
     DisposableEffect(roomCode) {
         val reactionsRef = db.child("reactions")
@@ -826,7 +826,7 @@ fun YouTubeWatchScreen(
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
                 val key = snapshot.key ?: return
                 val emoji = snapshot.child("emoji").getValue(String::class.java) ?: return
-                floatingReactions.add(FloatingReaction(key, emoji, Random.nextFloat()))
+                floatingReactions.add(YtFloatingReaction(key, emoji, Random.nextFloat()))
                 // Best-effort cleanup: whichever client processes it first removes the node
                 // a moment later, after the pop-up animation would have finished.
                 reactionsRef.child(key).removeValue()
@@ -1303,7 +1303,7 @@ fun YouTubeWatchScreen(
 }
 
 @Composable
-private fun FloatingEmoji(reaction: FloatingReaction, onDone: () -> Unit) {
+private fun FloatingEmoji(reaction: YtFloatingReaction, onDone: () -> Unit) {
     val offsetY = remember { Animatable(0f) }
     val alpha = remember { Animatable(1f) }
     LaunchedEffect(reaction.key) {
@@ -1330,7 +1330,7 @@ private fun FloatingEmoji(reaction: FloatingReaction, onDone: () -> Unit) {
 }
 
 @Composable
-private fun JoinLeaveBanner(entry: BannerEntry, onDone: () -> Unit) {
+private fun JoinLeaveBanner(entry: YtBannerEntry, onDone: () -> Unit) {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(entry.key) {
         alpha.animateTo(1f, animationSpec = tween(200))
@@ -1355,7 +1355,7 @@ private fun JoinLeaveBanner(entry: BannerEntry, onDone: () -> Unit) {
 }
 
 @Composable
-private fun PlaybackNotificationBanner(entry: PlaybackBannerEntry, onDone: () -> Unit) {
+private fun PlaybackNotificationBanner(entry: YtPlaybackBannerEntry, onDone: () -> Unit) {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(entry.key) {
         alpha.animateTo(1f, animationSpec = tween(200))
@@ -1397,7 +1397,7 @@ private fun PlaybackNotificationBanner(entry: PlaybackBannerEntry, onDone: () ->
  */
 @Composable
 private fun IncomingChatNotificationBanner(
-    notification: ChatNotification,
+    notification: YtChatNotification,
     onTap: () -> Unit
 ) {
     Surface(
@@ -1477,7 +1477,7 @@ private fun IncomingChatNotificationBanner(
 
 /** Small row of who's currently in the room, each avatar pulsing to show they're active. */
 @Composable
-private fun ParticipantAvatarsRow(participants: List<ParticipantInfo>, excludeUid: String) {
+private fun ParticipantAvatarsRow(participants: List<YtParticipantInfo>, excludeUid: String) {
     val others = participants.filter { it.uid != excludeUid }
     if (others.isEmpty()) return
     Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
@@ -1495,7 +1495,7 @@ private fun PlayerControlsOverlay(
     isPlaying: Boolean,
     currentMs: Long,
     durationMs: Long,
-    participants: List<ParticipantInfo>,
+    participants: List<YtParticipantInfo>,
     myUid: String,
     onBack: () -> Unit,
     onTogglePlay: () -> Unit,
@@ -1627,7 +1627,7 @@ private fun EmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
                 modifier = Modifier.padding(8.dp).weight(1f, fill = false),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(REACTION_EMOJIS) { emoji ->
+                items(YT_REACTION_EMOJIS) { emoji ->
                     Text(
                         text = emoji,
                         fontSize = TextUnit(26f, TextUnitType.Sp),
@@ -1655,7 +1655,7 @@ private fun EmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatPanel(
-    messages: List<ChatMessage>,
+    messages: List<YtChatMessage>,
     listState: LazyListState,
     myUid: String,
     input: String,
@@ -1971,7 +1971,7 @@ private fun ChatPanel(
  */
 @Composable
 private fun ChatMessageItem(
-    msg: ChatMessage,
+    msg: YtChatMessage,
     isMine: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -2291,79 +2291,4 @@ private fun ChatEmptyState(
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                     Icon(
                         Icons.Default.Forum,
-                        contentDescription = null,
-                        tint = CyanCore,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        Text(
-            text = "LIVE ROOM CHAT",
-            fontFamily = DisplayFontFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 16.sp,
-            letterSpacing = 1.2.sp,
-            color = Color.White
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = "Share hot takes and react in real-time with friends watching.",
-            fontFamily = BodyFontFamily,
-            fontSize = 13.sp,
-            color = MistTextMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Quick starter prompts
-        val prompts = listOf(
-            "🍿 Grab some popcorn",
-            "🔥 This part is fire!",
-            "😂 Bro no way",
-            "⚡ Sync is dialed in"
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.horizontalScroll(rememberScrollState())
-        ) {
-            prompts.forEach { prompt ->
-                Surface(
-                    color = AbyssSurfaceElevated,
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, AbyssOutline),
-                    modifier = Modifier.bouncyClick { onPromptClick(prompt) }
-                ) {
-                    Text(
-                        text = prompt,
-                        fontFamily = BodyFontFamily,
-                        fontSize = 12.sp,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-private fun typingIndicatorText(typingUsers: List<String>): String = when (typingUsers.size) {
-    0 -> ""
-    1 -> "${typingUsers[0]} is typing…"
-    2 -> "${typingUsers[0]} and ${typingUsers[1]} are typing…"
-    else -> "Several people are typing…"
-}
-
-private fun formatMillis(ms: Long): String {
-    val totalSeconds = (ms / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%d:%02d".format(minutes, seconds)
-}
+        
