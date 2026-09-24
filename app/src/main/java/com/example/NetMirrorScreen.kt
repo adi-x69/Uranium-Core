@@ -1,21 +1,22 @@
 package com.example
 
 import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Message
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.*
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +29,131 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+private const val NETMIRROR_HOME = "https://netmirror.studio/"
+
+private val BLOCKED_DOMAINS = listOf(
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+    "pagead2.googlesyndication", "adservice.google", "adnxs.com",
+    "amazon-adsystem.com", "scorecardresearch.com", "outbrain.com",
+    "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
+    "rubiconproject.com", "moatads.com", "exoclick.com", "popads.net",
+    "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
+    "trafficjunky.com", "popcash.net", "adspyglass.com"
+)
+
+// Real video/playlist files only. ".ts" segments and generic "video" URLs are NOT matched.
+private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|$)""", RegexOption.IGNORE_CASE)
+
+private fun isVideoUrl(url: String): Boolean =
+    url.startsWith("http", ignoreCase = true) && VIDEO_URL_REGEX.containsMatchIn(url)
+
+/**
+ * Port of the extension's content.js: when the page sends NETMIRROR_CHECK,
+ * answer that the extension is installed. Injected at document start.
+ */
+private const val DETECT_SCRIPT = """
+(function () {
+  if (window.__nmDetect) return;
+  window.__nmDetect = true;
+  window.addEventListener('message', function (e) {
+    if (e.source !== window) return;
+    if (e.data && e.data.type === 'NETMIRROR_CHECK') {
+      window.postMessage({ type: 'NETMIRROR_EXTENSION_DETECTED', installed: true }, '*');
+    }
+  });
+})();
+"""
+
+// Page helper: hides "extension not enabled" warnings, unlocks download buttons,
+// and reports video links found in the page. Throttled so it does not slow the site.
+private const val PAGE_SCRIPT = """
+(function () {
+  if (window.__nmPage) return;
+  window.__nmPage = true;
+  var sent = {};
+  var VIDEO_RE = /\.(m3u8|mp4|mkv|mpd)(\?|#|$)/i;
+
+  function send(url) {
+    if (!url || sent[url] || !VIDEO_RE.test(url)) return;
+    sent[url] = 1;
+    try { window.AndroidBridge.onVideoLinkFound(url); } catch (e) {}
+  }
+
+  function hideWarnings() {
+    var keywords = ['extension not enable', 'extension not enabled', 'adblocker detected',
+      'ad blocker detected', 'disable your adblock', 'extension required'];
+    document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(function (el) {
+      var t = (el.innerText || '').toLowerCase();
+      if (t.length > 0 && t.length < 80 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
+        el.style.display = 'none';
+      }
+    });
+  }
+
+  function unlockDownloadButtons() {
+    document.querySelectorAll('button, a, div[role="button"]').forEach(function (btn) {
+      var t = (btn.innerText || '').toLowerCase();
+      if (t.indexOf('download') >= 0) {
+        btn.style.pointerEvents = 'auto';
+        btn.style.opacity = '1';
+        btn.disabled = false;
+        btn.removeAttribute('disabled');
+        btn.classList.remove('disabled');
+      }
+    });
+  }
+
+  function extractVideoSources() {
+    document.querySelectorAll('video, source').forEach(function (el) {
+      send(el.src);
+      send(el.currentSrc);
+    });
+    try {
+      if (window.jwplayer) {
+        var jw = window.jwplayer();
+        if (jw && jw.getPlaylist) {
+          jw.getPlaylist().forEach(function (item) {
+            send(item.file);
+            if (item.sources) item.sources.forEach(function (s) { send(s.file); });
+          });
+        }
+      }
+    } catch (e) {}
+    document.querySelectorAll('script').forEach(function (script) {
+      var content = script.textContent || '';
+      var matches = content.match(/(https?:\/\/[^\s"'`]+\.(m3u8|mp4|mkv|mpd)[^\s"'`]*)/gi);
+      if (matches) matches.forEach(send);
+    });
+  }
+
+  function run() {
+    hideWarnings();
+    unlockDownloadButtons();
+    extractVideoSources();
+  }
+
+  var timer = null;
+  function schedule() {
+    if (timer) return;
+    timer = setTimeout(function () { timer = null; run(); }, 1500);
+  }
+
+  run();
+  setTimeout(run, 1000);
+  setTimeout(run, 3000);
+  setTimeout(run, 6000);
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+})();
+"""
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun NetMirrorScreen(
@@ -35,6 +161,8 @@ fun NetMirrorScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
+    remember { HeaderSettings.ensureLoaded(context) }
 
     var isLoading by remember { mutableStateOf(true) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -43,28 +171,29 @@ fun NetMirrorScreen(
     var capturedLinks by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedLink by remember { mutableStateOf<String?>(null) }
 
-    val blockedDomains = listOf(
-        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-        "pagead2.googlesyndication", "adservice.google", "adnxs.com",
-        "amazon-adsystem.com", "scorecardresearch.com", "outbrain.com",
-        "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
-        "rubiconproject.com", "moatads.com", "exoclick.com", "popads.net",
-        "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
-        "trafficjunky.com", "popcash.net", "adspyglass.com"
-    )
+    // Fullscreen video (WebChromeClient.onShowCustomView)
+    var customView by remember { mutableStateOf<View?>(null) }
+    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    fun isVideoUrl(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.contains(".m3u8") ||
-                lower.contains(".mp4") ||
-                lower.contains(".mkv") ||
-                lower.contains(".ts") ||
-                (lower.contains("video") && lower.contains("http") && !lower.contains("netmirror"))
+    // Pages the WebView is allowed to navigate to (NetMirror + the sites in the referer rules).
+    val allowedHostHints = remember {
+        listOf("netmirror") +
+            AppConfig.REFERER_RULES.keys +
+            AppConfig.REFERER_RULES.values.mapNotNull { runCatching { Uri.parse(it).host }.getOrNull() }
+    }
+
+    fun isAllowedNavigation(url: String): Boolean {
+        if (!(url.startsWith("http://") || url.startsWith("https://"))) return false
+        if (BLOCKED_DOMAINS.any { url.contains(it, ignoreCase = true) }) return false
+        if (allowedHostHints.any { url.contains(it, ignoreCase = true) }) return true
+        return isVideoUrl(url)
     }
 
     fun addCapturedLink(url: String) {
+        if (!isVideoUrl(url)) return // the JS bridge is reachable by any frame - validate here
         if (capturedLinks.any { it.equals(url, ignoreCase = true) }) return
 
+        val wasEmpty = capturedLinks.isEmpty()
         val newList = (capturedLinks + url)
             .distinctBy { it.lowercase() }
             .sortedWith(
@@ -73,155 +202,34 @@ fun NetMirrorScreen(
             )
 
         capturedLinks = newList
-        if (selectedLink == null) {
-            selectedLink = newList.firstOrNull()
-        }
-
-        Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
+        if (selectedLink == null) selectedLink = newList.firstOrNull()
+        if (wasEmpty) Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
     }
 
-    // ================= HEAVY JAVASCRIPT INJECTION =================
-    val heavyInjectionScript = """
-        (function() {
-            // ========== 1. Kill Extension Detection ==========
-            window.chrome = window.chrome || {};
-            window.chrome.runtime = window.chrome.runtime || {};
-            window.chrome.runtime.id = "fake-extension-id";
-            window.chrome.runtime.getManifest = function() { return { name: "NetMirror Extension" }; };
-            window.chrome.runtime.sendMessage = function() {};
-            window.chrome.runtime.connect = function() { return { onMessage: { addListener: function(){} } }; };
-
-            // Fake extension presence
-            Object.defineProperty(window, 'netmirrorExtension', {
-                value: true,
-                writable: false
-            });
-
-            // ========== 2. Remove "Extension Not Enable" messages ==========
-            function removeExtensionWarnings() {
-                const keywords = [
-                    'extension not enable', 'extension not enabled',
-                    'adblocker detected', 'ad blocker detected',
-                    'disable your adblock', 'install extension',
-                    'download with ext', 'extension required'
-                ];
-
-                document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(el => {
-                    const text = (el.innerText || el.textContent || '').toLowerCase();
-                    if (keywords.some(k => text.includes(k))) {
-                        el.style.display = 'none';
-                        el.remove();
-                    }
-                });
-
-                // Hide common warning containers
-                document.querySelectorAll('[class*="extension"], [id*="extension"], [class*="adblock"], [id*="adblock"]').forEach(el => {
-                    el.style.display = 'none';
-                    el.remove();
-                });
-            }
-
-            // ========== 3. Force unlock Download buttons ==========
-            function unlockDownloadButtons() {
-                document.querySelectorAll('button, a, div[role="button"]').forEach(btn => {
-                    const text = (btn.innerText || '').toLowerCase();
-                    if (text.includes('download') || text.includes('ext')) {
-                        btn.style.pointerEvents = 'auto';
-                        btn.style.opacity = '1';
-                        btn.disabled = false;
-                        btn.removeAttribute('disabled');
-                        btn.classList.remove('disabled');
-                    }
-                });
-            }
-
-            // ========== 4. Extract video sources from player & DOM ==========
-            function extractVideoSources() {
-                const sources = new Set();
-
-                // <video> and <source> tags
-                document.querySelectorAll('video, source').forEach(el => {
-                    if (el.src) sources.add(el.src);
-                    if (el.currentSrc) sources.add(el.currentSrc);
-                });
-
-                // Common player variables
-                if (window.player && window.player.src) sources.add(window.player.src);
-                if (window.jwplayer) {
-                    try {
-                        const jw = jwplayer();
-                        if (jw && jw.getPlaylist) {
-                            jw.getPlaylist().forEach(item => {
-                                if (item.file) sources.add(item.file);
-                                if (item.sources) item.sources.forEach(s => sources.add(s.file));
-                            });
-                        }
-                    } catch(e) {}
-                }
-
-                // HLS.js / video.js
-                if (window.Hls && window.Hls.instances) {
-                    window.Hls.instances.forEach(h => {
-                        if (h.url) sources.add(h.url);
-                    });
-                }
-
-                // Scan all scripts for m3u8/mp4
-                document.querySelectorAll('script').forEach(script => {
-                    const content = script.textContent || '';
-                    const matches = content.match(/(https?:\/\/[^\s"'`]+\.(m3u8|mp4|mkv)[^\s"'`]*)/gi);
-                    if (matches) matches.forEach(m => sources.add(m));
-                });
-
-                // Send found links to Android
-                sources.forEach(url => {
-                    if (url && (url.includes('.m3u8') || url.includes('.mp4') || url.includes('.mkv'))) {
-                        window.AndroidBridge.onVideoLinkFound(url);
-                    }
-                });
-            }
-
-            // ========== 5. Continuous monitoring ==========
-            removeExtensionWarnings();
-            unlockDownloadButtons();
-            extractVideoSources();
-
-            // Run again after delays (site loads content dynamically)
-            setTimeout(() => {
-                removeExtensionWarnings();
-                unlockDownloadButtons();
-                extractVideoSources();
-            }, 1000);
-
-            setTimeout(() => {
-                removeExtensionWarnings();
-                unlockDownloadButtons();
-                extractVideoSources();
-            }, 3000);
-
-            setTimeout(() => {
-                removeExtensionWarnings();
-                unlockDownloadButtons();
-                extractVideoSources();
-            }, 6000);
-
-            // Observe DOM changes
-            const observer = new MutationObserver(() => {
-                removeExtensionWarnings();
-                unlockDownloadButtons();
-                extractVideoSources();
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-
-            console.log('NetMirror heavy injection active');
-        })();
-    """.trimIndent()
+    fun exitFullscreen() {
+        val act = activity ?: return
+        val decor = act.window.decorView as ViewGroup
+        customView?.let { decor.removeView(it) }
+        customView = null
+        customViewCallback?.onCustomViewHidden()
+        customViewCallback = null
+        act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        WindowCompat.getInsetsController(act.window, decor).show(WindowInsetsCompat.Type.systemBars())
+    }
 
     BackHandler {
-        if (canGoBack && webView != null) {
-            webView?.goBack()
-        } else {
-            onNavigateBack()
+        when {
+            customView != null -> exitFullscreen()
+            canGoBack && webView != null -> webView?.goBack()
+            else -> onNavigateBack()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            exitFullscreen()
+            webView?.destroy()
+            webView = null
         }
     }
 
@@ -268,7 +276,7 @@ fun NetMirrorScreen(
                 }
 
                 // Captured Link Action Bar
-                if (selectedLink != null) {
+                selectedLink?.let { link ->
                     Surface(
                         color = Color(0xFF1B5E20),
                         modifier = Modifier.fillMaxWidth()
@@ -285,7 +293,7 @@ fun NetMirrorScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = selectedLink!!,
+                                text = link,
                                 color = Color(0xFFB9F6CA),
                                 fontSize = 12.sp,
                                 maxLines = 2,
@@ -295,7 +303,7 @@ fun NetMirrorScreen(
 
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
-                                    onClick = { onDirectLinkFound(selectedLink!!) },
+                                    onClick = { onDirectLinkFound(link) },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                                 ) {
@@ -334,11 +342,12 @@ fun NetMirrorScreen(
                     addJavascriptInterface(object {
                         @JavascriptInterface
                         fun onVideoLinkFound(url: String) {
-                            post {
-                                addCapturedLink(url)
-                            }
+                            post { addCapturedLink(url) }
                         }
                     }, "AndroidBridge")
+
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                     settings.apply {
                         javaScriptEnabled = true
@@ -348,7 +357,7 @@ fun NetMirrorScreen(
                         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         userAgentString =
                             "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 " +
-                                    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                         loadWithOverviewMode = true
                         useWideViewPort = true
                         setSupportZoom(true)
@@ -357,8 +366,12 @@ fun NetMirrorScreen(
                         allowFileAccess = false
                         allowContentAccess = false
                         cacheMode = WebSettings.LOAD_DEFAULT
-                        // Important for some players
                         javaScriptCanOpenWindowsAutomatically = false
+                    }
+
+                    // Extension's content.js reply - runs before the page's own scripts.
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        WebViewCompat.addDocumentStartJavaScript(this, DETECT_SCRIPT, setOf("*"))
                     }
 
                     webChromeClient = object : WebChromeClient() {
@@ -367,10 +380,36 @@ fun NetMirrorScreen(
                             isDialog: Boolean,
                             isUserGesture: Boolean,
                             resultMsg: Message?
-                        ): Boolean = false
+                        ): Boolean = false // block pop-up windows
 
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             isLoading = newProgress < 100
+                        }
+
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            val act = activity
+                            if (view == null || act == null || customView != null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            val decor = act.window.decorView as ViewGroup
+                            view.setBackgroundColor(android.graphics.Color.BLACK)
+                            decor.addView(
+                                view,
+                                FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            )
+                            customView = view
+                            customViewCallback = callback
+                            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            WindowCompat.getInsetsController(act.window, decor)
+                                .hide(WindowInsetsCompat.Type.systemBars())
+                        }
+
+                        override fun onHideCustomView() {
+                            exitFullscreen()
                         }
                     }
 
@@ -379,14 +418,14 @@ fun NetMirrorScreen(
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             isLoading = true
                             canGoBack = view?.canGoBack() == true
+                            // Fallback for WebViews without document-start scripts.
+                            view?.evaluateJavascript(DETECT_SCRIPT, null)
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
                             isLoading = false
                             canGoBack = view?.canGoBack() == true
-
-                            // Inject the heavy script
-                            view?.evaluateJavascript(heavyInjectionScript, null)
+                            view?.evaluateJavascript(PAGE_SCRIPT, null)
                         }
 
                         override fun shouldOverrideUrlLoading(
@@ -394,43 +433,49 @@ fun NetMirrorScreen(
                             request: WebResourceRequest?
                         ): Boolean {
                             val url = request?.url?.toString() ?: return true
-                            val allowed = url.contains("netmirror", ignoreCase = true) ||
-                                    url.contains(".m3u8") || url.contains(".mp4")
-                            return !allowed
+                            return !isAllowedNavigation(url)
                         }
 
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                            val allowed = url?.contains("netmirror", ignoreCase = true) == true ||
-                                    url?.contains(".m3u8") == true || url?.contains(".mp4") == true
-                            return !allowed
+                            return url == null || !isAllowedNavigation(url)
                         }
 
+                        // One interceptor, three steps in order:
+                        // 1) block ads  2) capture video links  3) add extension headers
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
                         ): WebResourceResponse? {
-                            val url = request?.url?.toString() ?: return null
+                            if (request == null) return null
+                            val url = request.url.toString()
 
-                            // Block ads
-                            if (blockedDomains.any { domain ->
-                                    url.contains(domain, ignoreCase = true)
-                                }) {
-                                return WebResourceResponse("text/plain", "utf-8", null)
+                            // 1) Block ads
+                            if (BLOCKED_DOMAINS.any { url.contains(it, ignoreCase = true) }) {
+                                return WebResourceResponse(
+                                    "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                                )
                             }
 
-                            // Capture video links from network
+                            // 2) Capture video links seen on the network
                             if (isVideoUrl(url)) {
-                                view?.post {
-                                    addCapturedLink(url)
-                                }
+                                view?.post { addCapturedLink(url) }
                             }
 
-                            return super.shouldInterceptRequest(view, request)
+                            // 3) Referer rules + custom headers (GET only)
+                            if (!request.method.equals("GET", ignoreCase = true)) return null
+                            if (!url.startsWith("http")) return null
+                            val extra = AppConfig.resolveVideoHeaders(url)
+                            if (extra.isEmpty()) return null
+                            return try {
+                                fetchWithHeaders(url, request.requestHeaders, extra)
+                            } catch (e: Exception) {
+                                null // fall back to a normal WebView load
+                            }
                         }
                     }
 
-                    loadUrl("https://netmirror.studio/")
+                    loadUrl(NETMIRROR_HOME)
                 }
             },
             modifier = Modifier
@@ -438,4 +483,43 @@ fun NetMirrorScreen(
                 .weight(1f)
         )
     }
+}
+
+/** Re-does the request ourselves so we can set headers WebView does not let us change. */
+private fun fetchWithHeaders(
+    url: String,
+    pageHeaders: Map<String, String>,
+    extra: Map<String, String>
+): WebResourceResponse {
+    val conn = URL(url).openConnection() as HttpURLConnection
+    conn.instanceFollowRedirects = true
+    conn.connectTimeout = 15_000
+    conn.readTimeout = 30_000
+
+    pageHeaders.forEach { (k, v) ->
+        // Let HttpURLConnection handle compression itself.
+        if (!k.equals("Accept-Encoding", ignoreCase = true)) conn.setRequestProperty(k, v)
+    }
+    extra.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+    if (extra.keys.none { it.equals("Cookie", ignoreCase = true) }) {
+        CookieManager.getInstance().getCookie(url)?.let { conn.setRequestProperty("Cookie", it) }
+    }
+
+    val code = conn.responseCode
+    val stream = if (code >= 400) conn.errorStream else conn.inputStream
+    val contentType = conn.contentType ?: "application/octet-stream"
+    val mime = contentType.substringBefore(';').trim()
+    val encoding = if (contentType.contains("charset=", ignoreCase = true))
+        contentType.substringAfter("charset=").trim() else null
+
+    val skip = setOf("content-encoding", "content-length", "transfer-encoding")
+    val headers = HashMap<String, String>()
+    conn.headerFields.forEach { (k, v) ->
+        if (k != null && v != null && k.lowercase() !in skip) headers[k] = v.joinToString(", ")
+    }
+    headers["Access-Control-Allow-Origin"] = "*"
+
+    return WebResourceResponse(
+        mime, encoding, code, conn.responseMessage?.ifBlank { null } ?: "OK", headers, stream
+    )
 }
