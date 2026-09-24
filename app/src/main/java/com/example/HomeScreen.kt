@@ -72,7 +72,7 @@ data class WatchInvite(
 fun HomeScreen(
     onNavigateToRoom: (String) -> Unit,
     onNavigateToFriends: () -> Unit,
-    onNavigateToWatch: (String) -> Unit,
+    onNavigateToWatch: (String, Boolean) -> Unit,
     onNavigateToProfile: () -> Unit
 ) {
     val context = LocalContext.current
@@ -295,7 +295,7 @@ fun HomeScreen(
                 ) {
                     ContinueWatchingRow(
                         entries = continueWatching,
-                        onResume = { entry -> onNavigateToWatch(entry.roomCode) },
+                        onResume = { entry -> onNavigateToWatch(entry.roomCode, entry.isYouTube) },
                         onDismiss = { entry ->
                             continueWatching = continueWatching.filter { it.roomCode != entry.roomCode }
                             removeContinueWatching(db.child("users"), uid, entry.roomCode)
