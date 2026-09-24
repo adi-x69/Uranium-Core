@@ -270,6 +270,9 @@ fun WatchScreen(
     val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
     var isUserSeeking by remember { mutableStateOf(false) }
 
+    // Load the saved header rules / Pause switch once before the player is built.
+    remember { HeaderSettings.ensureLoaded(context) }
+
     // Holds the URL of the video currently loaded, so every request (playlist, segments,
     // subtitles) gets the Referer/User-Agent that match the main video URL.
     val currentVideoUrl = remember { java.util.concurrent.atomic.AtomicReference("") }
