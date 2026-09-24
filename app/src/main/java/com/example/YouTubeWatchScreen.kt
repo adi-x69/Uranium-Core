@@ -160,11 +160,11 @@ private data class YtBannerEntry(val key: String, val text: String)
 /** A transient play/pause notification banner shown over the video. */
 private data class YtPlaybackBannerEntry(val key: String, val text: String, val isPlaying: Boolean)
 
-private fun watchDbRef(roomCode: String) = FirebaseDatabase
+private fun YtWatchDbRef(roomCode: String) = FirebaseDatabase
     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
     .reference.child("rooms").child(roomCode)
 
-private fun formatTimestamp(ms: Long): String {
+private fun YtFormatTimestamp(ms: Long): String {
     if (ms <= 0L) return ""
     return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms))
 }
@@ -180,7 +180,7 @@ fun YouTubeWatchScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val auth = remember { FirebaseAuth.getInstance() }
     val uid = auth.currentUser?.uid ?: ""
-    val db = remember(roomCode) { watchDbRef(roomCode) }
+    val db = remember(roomCode) { YtWatchDbRef(roomCode) }
     val usersRef = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference.child("users") }
 
     var myUsername by remember { mutableStateOf(UserProfileStorage.getCachedUsername(context, uid).ifEmpty { "someone" }) }
@@ -1030,7 +1030,7 @@ fun YouTubeWatchScreen(
             // Floating emoji reactions
             floatingReactions.forEach { reaction ->
                 key(reaction.key) {
-                    FloatingEmoji(reaction) {
+                    YtFloatingEmoji(reaction) {
                         floatingReactions.remove(reaction)
                     }
                 }
@@ -1063,12 +1063,12 @@ fun YouTubeWatchScreen(
             ) {
                 joinLeaveBanners.forEach { entry ->
                     key(entry.key) {
-                        JoinLeaveBanner(entry) { joinLeaveBanners.remove(entry) }
+                        YtJoinLeaveBanner(entry) { joinLeaveBanners.remove(entry) }
                     }
                 }
                 playbackBanners.forEach { entry ->
                     key(entry.key) {
-                        PlaybackNotificationBanner(entry) { playbackBanners.remove(entry) }
+                        YtPlaybackNotificationBanner(entry) { playbackBanners.remove(entry) }
                     }
                 }
             }
@@ -1146,7 +1146,7 @@ fun YouTubeWatchScreen(
                     .padding(top = if (othersBuffering != null) 98.dp else 56.dp, start = 16.dp, end = 16.dp)
             ) {
                 activeChatNotification?.let { notif ->
-                    IncomingChatNotificationBanner(
+                    YtIncomingChatNotificationBanner(
                         notification = notif,
                         onTap = {
                             activeChatNotification = null
@@ -1197,7 +1197,7 @@ fun YouTubeWatchScreen(
                 exit = fadeOut(),
                 modifier = Modifier.fillMaxSize()
             ) {
-                PlayerControlsOverlay(
+                YtPlayerControlsOverlay(
                     isHost = uid == hostUid,
                     canControl = canControl,
                     controlsUnlocked = controlsUnlocked,
@@ -1208,7 +1208,7 @@ fun YouTubeWatchScreen(
                     myUid = uid,
                     onBack = onNavigateBack,
                     onTogglePlay = {
-                        if (!canControl) return@PlayerControlsOverlay
+                        if (!canControl) return@YtPlayerControlsOverlay
                         val newPlaying = !isPlayingState
                         isPlayingState = newPlaying
                         roomIsPlaying = newPlaying
@@ -1224,7 +1224,7 @@ fun YouTubeWatchScreen(
                     onSkipBack = { skip(-10000L) },
                     onSkipForward = { skip(10000L) },
                     onSeek = { targetMs ->
-                        if (!canControl) return@PlayerControlsOverlay
+                        if (!canControl) return@YtPlayerControlsOverlay
                         val willPlay = isPlayingState || roomIsPlaying
                         if (isYouTubeMode) {
                             youtubePlayer?.seekTo(targetMs / 1000f)
@@ -1255,7 +1255,7 @@ fun YouTubeWatchScreen(
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 72.dp)
             ) {
-                EmojiPickerRow(
+                YtEmojiPickerRow(
                     onPick = { emoji ->
                         sendReaction(emoji)
                         isEmojiPickerOpen = false
@@ -1278,7 +1278,7 @@ fun YouTubeWatchScreen(
             videoContent(Modifier.fillMaxSize())
         }
         if (isChatMode) {
-            ChatPanel(
+            YtChatPanel(
                 messages = chatMessages,
                 listState = chatListState,
                 myUid = uid,
@@ -1303,7 +1303,7 @@ fun YouTubeWatchScreen(
 }
 
 @Composable
-private fun FloatingEmoji(reaction: YtFloatingReaction, onDone: () -> Unit) {
+private fun YtFloatingEmoji(reaction: YtFloatingReaction, onDone: () -> Unit) {
     val offsetY = remember { Animatable(0f) }
     val alpha = remember { Animatable(1f) }
     LaunchedEffect(reaction.key) {
@@ -1330,7 +1330,7 @@ private fun FloatingEmoji(reaction: YtFloatingReaction, onDone: () -> Unit) {
 }
 
 @Composable
-private fun JoinLeaveBanner(entry: YtBannerEntry, onDone: () -> Unit) {
+private fun YtJoinLeaveBanner(entry: YtBannerEntry, onDone: () -> Unit) {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(entry.key) {
         alpha.animateTo(1f, animationSpec = tween(200))
@@ -1355,7 +1355,7 @@ private fun JoinLeaveBanner(entry: YtBannerEntry, onDone: () -> Unit) {
 }
 
 @Composable
-private fun PlaybackNotificationBanner(entry: YtPlaybackBannerEntry, onDone: () -> Unit) {
+private fun YtPlaybackNotificationBanner(entry: YtPlaybackBannerEntry, onDone: () -> Unit) {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(entry.key) {
         alpha.animateTo(1f, animationSpec = tween(200))
@@ -1396,7 +1396,7 @@ private fun PlaybackNotificationBanner(entry: YtPlaybackBannerEntry, onDone: () 
  * indicators with dark translucent background, crimson accent border, and rounded corners.
  */
 @Composable
-private fun IncomingChatNotificationBanner(
+private fun YtIncomingChatNotificationBanner(
     notification: YtChatNotification,
     onTap: () -> Unit
 ) {
@@ -1477,7 +1477,7 @@ private fun IncomingChatNotificationBanner(
 
 /** Small row of who's currently in the room, each avatar pulsing to show they're active. */
 @Composable
-private fun ParticipantAvatarsRow(participants: List<YtParticipantInfo>, excludeUid: String) {
+private fun YtParticipantAvatarsRow(participants: List<YtParticipantInfo>, excludeUid: String) {
     val others = participants.filter { it.uid != excludeUid }
     if (others.isEmpty()) return
     Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
@@ -1488,7 +1488,7 @@ private fun ParticipantAvatarsRow(participants: List<YtParticipantInfo>, exclude
 }
 
 @Composable
-private fun PlayerControlsOverlay(
+private fun YtPlayerControlsOverlay(
     isHost: Boolean,
     canControl: Boolean,
     controlsUnlocked: Boolean,
@@ -1529,7 +1529,7 @@ private fun PlayerControlsOverlay(
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Spacer(modifier = Modifier.weight(1f))
-            ParticipantAvatarsRow(participants = participants, excludeUid = myUid)
+            YtParticipantAvatarsRow(participants = participants, excludeUid = myUid)
             Spacer(modifier = Modifier.width(8.dp))
             if (isHost) {
                 Text(
@@ -1574,7 +1574,7 @@ private fun PlayerControlsOverlay(
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(formatMillis((dragValue ?: currentMs.toFloat()).toLong()), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text(YtFormatMillis((dragValue ?: currentMs.toFloat()).toLong()), color = Color.White, style = MaterialTheme.typography.labelSmall)
                 val validDuration = durationMs > 0
                 val maxMs = if (validDuration) durationMs.toFloat() else 1000f
                 Slider(
@@ -1594,7 +1594,7 @@ private fun PlayerControlsOverlay(
                     enabled = canControl && validDuration,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                 )
-                Text(formatMillis(if (validDuration) durationMs else 0L), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text(YtFormatMillis(if (validDuration) durationMs else 0L), color = Color.White, style = MaterialTheme.typography.labelSmall)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1620,7 +1620,7 @@ private fun PlayerControlsOverlay(
 }
 
 @Composable
-private fun EmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
+private fun YtEmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
     Surface(color = Color.Black.copy(alpha = 0.6f), shape = MaterialTheme.shapes.medium) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             LazyRow(
@@ -1654,7 +1654,7 @@ private fun EmojiPickerRow(onPick: (String) -> Unit, onClose: () -> Unit = {}) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatPanel(
+private fun YtChatPanel(
     messages: List<YtChatMessage>,
     listState: LazyListState,
     myUid: String,
@@ -1813,7 +1813,7 @@ private fun ChatPanel(
                     .fillMaxWidth()
             ) {
                 if (messages.isEmpty()) {
-                    ChatEmptyState(
+                    YtChatEmptyState(
                         onPromptClick = { prompt ->
                             onQuickSend?.invoke(prompt) ?: run {
                                 onInputChange(prompt)
@@ -1833,7 +1833,7 @@ private fun ChatPanel(
                         item { Spacer(modifier = Modifier.height(6.dp)) }
                         items(messages, key = { it.id }) { msg ->
                             val isMine = msg.senderUid == myUid
-                            ChatMessageItem(
+                            YtChatMessageItem(
                                 msg = msg,
                                 isMine = isMine
                             )
@@ -1851,11 +1851,11 @@ private fun ChatPanel(
                 exit = fadeOut(animationSpec = tween(180)) +
                         slideOutVertically(animationSpec = tween(180)) { it / 2 }
             ) {
-                AnimatedTypingWave(typingUsers = typingUsers)
+                YtAnimatedTypingWave(typingUsers = typingUsers)
             }
 
             // Quick Reaction Emoji Bar (Instant live burst + chat message)
-            QuickEmojiBar(
+            YtQuickEmojiBar(
                 onEmojiTap = { emoji ->
                     onSendReaction?.invoke(emoji)
                     onQuickSend?.invoke(emoji) ?: run {
@@ -1970,7 +1970,7 @@ private fun ChatPanel(
  * Animated individual message item with typography and smooth entrance.
  */
 @Composable
-private fun ChatMessageItem(
+private fun YtChatMessageItem(
     msg: YtChatMessage,
     isMine: Boolean,
     modifier: Modifier = Modifier
@@ -2039,7 +2039,7 @@ private fun ChatMessageItem(
                     modifier = Modifier.padding(top = 3.dp, end = 4.dp)
                 ) {
                     Text(
-                        text = formatTimestamp(msg.timestamp),
+                        text = YtFormatTimestamp(msg.timestamp),
                         fontFamily = BodyFontFamily,
                         style = MaterialTheme.typography.labelSmall,
                         color = MistTextMuted
@@ -2102,7 +2102,7 @@ private fun ChatMessageItem(
                     }
 
                     Text(
-                        text = formatTimestamp(msg.timestamp),
+                        text = YtFormatTimestamp(msg.timestamp),
                         fontFamily = BodyFontFamily,
                         style = MaterialTheme.typography.labelSmall,
                         color = MistTextMuted,
@@ -2118,7 +2118,7 @@ private fun ChatMessageItem(
  * Animated 3-dot sinusoidal wave typing indicator.
  */
 @Composable
-private fun AnimatedTypingWave(
+private fun YtAnimatedTypingWave(
     typingUsers: List<String>,
     modifier: Modifier = Modifier
 ) {
@@ -2159,7 +2159,7 @@ private fun AnimatedTypingWave(
             }
 
             Text(
-                text = typingIndicatorText(typingUsers),
+                text = YtTypingIndicatorText(typingUsers),
                 fontFamily = DisplayFontFamily,
                 style = MaterialTheme.typography.labelSmall,
                 color = CyanGlow
@@ -2172,7 +2172,7 @@ private fun AnimatedTypingWave(
  * Quick emoji reaction bar with high-speed tap reactions.
  */
 @Composable
-private fun QuickEmojiBar(
+private fun YtQuickEmojiBar(
     onEmojiTap: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2241,7 +2241,7 @@ private fun QuickEmojiBar(
  * Empty chat state with breathing animation and clickable prompt chips.
  */
 @Composable
-private fun ChatEmptyState(
+private fun YtChatEmptyState(
     onPromptClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2289,6 +2289,4 @@ private fun ChatEmptyState(
                 modifier = Modifier.size(52.dp)
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        Icons.Default.Forum,
-        
+           
