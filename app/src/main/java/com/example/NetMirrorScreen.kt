@@ -44,32 +44,14 @@ fun NetMirrorScreen(
     var capturedLinks by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedLink by remember { mutableStateOf<String?>(null) }
 
-    // Smart (less detectable) block list
     val blockedDomains = listOf(
-        "doubleclick.net",
-        "googlesyndication.com",
-        "googleadservices.com",
-        "pagead2.googlesyndication",
-        "adservice.google",
-        "adnxs.com",
-        "amazon-adsystem.com",
-        "scorecardresearch.com",
-        "outbrain.com",
-        "taboola.com",
-        "criteo.com",
-        "pubmatic.com",
-        "openx.net",
-        "rubiconproject.com",
-        "moatads.com",
-        "exoclick.com",
-        "popads.net",
-        "propellerads.com",
-        "adsterra.com",
-        "clickadu.com",
-        "juicyads.com",
-        "trafficjunky.com",
-        "popcash.net",
-        "adspyglass.com"
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+        "pagead2.googlesyndication", "adservice.google", "adnxs.com",
+        "amazon-adsystem.com", "scorecardresearch.com", "outbrain.com",
+        "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
+        "rubiconproject.com", "moatads.com", "exoclick.com", "popads.net",
+        "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
+        "trafficjunky.com", "popcash.net", "adspyglass.com"
     )
 
     fun isVideoUrl(url: String): Boolean {
@@ -77,6 +59,7 @@ fun NetMirrorScreen(
         return lower.contains(".m3u8") ||
                 lower.contains(".mp4") ||
                 lower.contains(".mkv") ||
+                lower.contains(".ts") ||
                 (lower.contains("video") && lower.contains("http") && !lower.contains("netmirror"))
     }
 
@@ -97,6 +80,143 @@ fun NetMirrorScreen(
 
         Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
     }
+
+    // ================= HEAVY JAVASCRIPT INJECTION =================
+    val heavyInjectionScript = """
+        (function() {
+            // ========== 1. Kill Extension Detection ==========
+            window.chrome = window.chrome || {};
+            window.chrome.runtime = window.chrome.runtime || {};
+            window.chrome.runtime.id = "fake-extension-id";
+            window.chrome.runtime.getManifest = function() { return { name: "NetMirror Extension" }; };
+            window.chrome.runtime.sendMessage = function() {};
+            window.chrome.runtime.connect = function() { return { onMessage: { addListener: function(){} } }; };
+
+            // Fake extension presence
+            Object.defineProperty(window, 'netmirrorExtension', {
+                value: true,
+                writable: false
+            });
+
+            // ========== 2. Remove "Extension Not Enable" messages ==========
+            function removeExtensionWarnings() {
+                const keywords = [
+                    'extension not enable', 'extension not enabled',
+                    'adblocker detected', 'ad blocker detected',
+                    'disable your adblock', 'install extension',
+                    'download with ext', 'extension required'
+                ];
+
+                document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(el => {
+                    const text = (el.innerText || el.textContent || '').toLowerCase();
+                    if (keywords.some(k => text.includes(k))) {
+                        el.style.display = 'none';
+                        el.remove();
+                    }
+                });
+
+                // Hide common warning containers
+                document.querySelectorAll('[class*="extension"], [id*="extension"], [class*="adblock"], [id*="adblock"]').forEach(el => {
+                    el.style.display = 'none';
+                    el.remove();
+                });
+            }
+
+            // ========== 3. Force unlock Download buttons ==========
+            function unlockDownloadButtons() {
+                document.querySelectorAll('button, a, div[role="button"]').forEach(btn => {
+                    const text = (btn.innerText || '').toLowerCase();
+                    if (text.includes('download') || text.includes('ext')) {
+                        btn.style.pointerEvents = 'auto';
+                        btn.style.opacity = '1';
+                        btn.disabled = false;
+                        btn.removeAttribute('disabled');
+                        btn.classList.remove('disabled');
+                    }
+                });
+            }
+
+            // ========== 4. Extract video sources from player & DOM ==========
+            function extractVideoSources() {
+                const sources = new Set();
+
+                // <video> and <source> tags
+                document.querySelectorAll('video, source').forEach(el => {
+                    if (el.src) sources.add(el.src);
+                    if (el.currentSrc) sources.add(el.currentSrc);
+                });
+
+                // Common player variables
+                if (window.player && window.player.src) sources.add(window.player.src);
+                if (window.jwplayer) {
+                    try {
+                        const jw = jwplayer();
+                        if (jw && jw.getPlaylist) {
+                            jw.getPlaylist().forEach(item => {
+                                if (item.file) sources.add(item.file);
+                                if (item.sources) item.sources.forEach(s => sources.add(s.file));
+                            });
+                        }
+                    } catch(e) {}
+                }
+
+                // HLS.js / video.js
+                if (window.Hls && window.Hls.instances) {
+                    window.Hls.instances.forEach(h => {
+                        if (h.url) sources.add(h.url);
+                    });
+                }
+
+                // Scan all scripts for m3u8/mp4
+                document.querySelectorAll('script').forEach(script => {
+                    const content = script.textContent || '';
+                    const matches = content.match(/(https?:\/\/[^\s"'`]+\.(m3u8|mp4|mkv)[^\s"'`]*)/gi);
+                    if (matches) matches.forEach(m => sources.add(m));
+                });
+
+                // Send found links to Android
+                sources.forEach(url => {
+                    if (url && (url.includes('.m3u8') || url.includes('.mp4') || url.includes('.mkv'))) {
+                        window.AndroidBridge.onVideoLinkFound(url);
+                    }
+                });
+            }
+
+            // ========== 5. Continuous monitoring ==========
+            removeExtensionWarnings();
+            unlockDownloadButtons();
+            extractVideoSources();
+
+            // Run again after delays (site loads content dynamically)
+            setTimeout(() => {
+                removeExtensionWarnings();
+                unlockDownloadButtons();
+                extractVideoSources();
+            }, 1000);
+
+            setTimeout(() => {
+                removeExtensionWarnings();
+                unlockDownloadButtons();
+                extractVideoSources();
+            }, 3000);
+
+            setTimeout(() => {
+                removeExtensionWarnings();
+                unlockDownloadButtons();
+                extractVideoSources();
+            }, 6000);
+
+            // Observe DOM changes
+            const observer = new MutationObserver(() => {
+                removeExtensionWarnings();
+                unlockDownloadButtons();
+                extractVideoSources();
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            console.log('NetMirror heavy injection active');
+        })();
+    """.trimIndent()
 
     BackHandler {
         if (canGoBack && webView != null) {
@@ -211,6 +331,16 @@ fun NetMirrorScreen(
                 WebView(ctx).apply {
                     webView = this
 
+                    // Bridge so JavaScript can send links to Kotlin
+                    addJavascriptInterface(object {
+                        @JavascriptInterface
+                        fun onVideoLinkFound(url: String) {
+                            post {
+                                addCapturedLink(url)
+                            }
+                        }
+                    }, "AndroidBridge")
+
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
@@ -228,9 +358,10 @@ fun NetMirrorScreen(
                         allowFileAccess = false
                         allowContentAccess = false
                         cacheMode = WebSettings.LOAD_DEFAULT
+                        // Important for some players
+                        javaScriptCanOpenWindowsAutomatically = false
                     }
 
-                    // Block popups completely
                     webChromeClient = object : WebChromeClient() {
                         override fun onCreateWindow(
                             view: WebView?,
@@ -255,46 +386,8 @@ fun NetMirrorScreen(
                             isLoading = false
                             canGoBack = view?.canGoBack() == true
 
-                            // Very strong anti-detection + cleanup script
-                            view?.evaluateJavascript(
-                                """
-                                (function() {
-                                    function hideAdblockWarning() {
-                                        // Hide any element that contains "AdBlocker Detected"
-                                        var all = document.querySelectorAll('div, section, h1, h2, h3, p, span');
-                                        all.forEach(function(el) {
-                                            var text = (el.innerText || '').toLowerCase();
-                                            if (text.includes('adblocker detected') || 
-                                                text.includes('ad blocker detected') ||
-                                                text.includes('disable your adblock')) {
-                                                el.style.display = 'none';
-                                                if (el.parentElement) el.parentElement.style.display = 'none';
-                                            }
-                                        });
-
-                                        // Hide common adblock overlay classes/ids
-                                        var selectors = [
-                                            '[class*="adblock"]', '[id*="adblock"]',
-                                            '[class*="ad-block"]', '[id*="ad-block"]',
-                                            '[class*="blocker"]', '[id*="blocker"]',
-                                            '.adsbygoogle', 'iframe[src*="ads"]'
-                                        ];
-                                        selectors.forEach(function(sel) {
-                                            document.querySelectorAll(sel).forEach(function(el) {
-                                                el.style.display = 'none';
-                                                el.remove();
-                                            });
-                                        });
-                                    }
-
-                                    hideAdblockWarning();
-                                    // Run again after a short delay (in case it appears late)
-                                    setTimeout(hideAdblockWarning, 800);
-                                    setTimeout(hideAdblockWarning, 2000);
-                                })();
-                                """.trimIndent(),
-                                null
-                            )
+                            // Inject the heavy script
+                            view?.evaluateJavascript(heavyInjectionScript, null)
                         }
 
                         override fun shouldOverrideUrlLoading(
@@ -302,13 +395,15 @@ fun NetMirrorScreen(
                             request: WebResourceRequest?
                         ): Boolean {
                             val url = request?.url?.toString() ?: return true
-                            val allowed = url.contains("netmirror", ignoreCase = true)
+                            val allowed = url.contains("netmirror", ignoreCase = true) ||
+                                    url.contains(".m3u8") || url.contains(".mp4")
                             return !allowed
                         }
 
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                            val allowed = url?.contains("netmirror", ignoreCase = true) == true
+                            val allowed = url?.contains("netmirror", ignoreCase = true) == true ||
+                                    url?.contains(".m3u8") == true || url?.contains(".mp4") == true
                             return !allowed
                         }
 
@@ -318,14 +413,14 @@ fun NetMirrorScreen(
                         ): WebResourceResponse? {
                             val url = request?.url?.toString() ?: return null
 
-                            // Smart ad blocking
+                            // Block ads
                             if (blockedDomains.any { domain ->
                                     url.contains(domain, ignoreCase = true)
                                 }) {
                                 return WebResourceResponse("text/plain", "utf-8", null)
                             }
 
-                            // Capture real video links
+                            // Capture video links from network
                             if (isVideoUrl(url)) {
                                 view?.post {
                                     addCapturedLink(url)
