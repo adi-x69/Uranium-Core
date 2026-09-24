@@ -55,13 +55,26 @@ fun NetMirrorScreen(
     )
 
     fun isVideoUrl(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.contains(".m3u8") ||
-                lower.contains(".mp4") ||
-                lower.contains(".mkv") ||
-                lower.contains(".ts") ||
-                (lower.contains("video") && lower.contains("http") && !lower.contains("netmirror"))
-    }
+    val lower = url.lowercase()
+
+    // Temporary debug filter - catches almost everything that could be video
+    return lower.contains(".m3u8") ||
+           lower.contains(".mp4") ||
+           lower.contains(".mkv") ||
+           lower.contains(".ts") ||
+           lower.contains("m3u8") ||
+           lower.contains("playlist") ||
+           lower.contains("manifest") ||
+           lower.contains("segment") ||
+           lower.contains("video") ||
+           lower.contains("stream") ||
+           lower.contains("media") ||
+           lower.contains("cdn") ||
+           lower.contains("hls") ||
+           lower.endsWith(".ts") ||
+           (lower.startsWith("http") && lower.length > 80) // long URLs often contain tokens
+           
+}
 
     fun addCapturedLink(url: String) {
         if (capturedLinks.any { it.equals(url, ignoreCase = true) }) return
@@ -78,7 +91,7 @@ fun NetMirrorScreen(
             selectedLink = newList.firstOrNull()
         }
 
-        Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Captured: ${url.take(80)}...", Toast.LENGTH_LONG).show()
     }
 
     // ================= HEAVY JAVASCRIPT INJECTION =================
