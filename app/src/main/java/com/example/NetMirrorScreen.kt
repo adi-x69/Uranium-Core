@@ -13,7 +13,11 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -22,6 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +60,26 @@ private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|$)""", RegexOpt
 private fun isVideoUrl(url: String): Boolean =
     url.startsWith("http", ignoreCase = true) && VIDEO_URL_REGEX.containsMatchIn(url)
 
+/** One captured video link. [resolution] is e.g. "480p", or null while unknown. */
+private data class CapturedLink(val key: String, val url: String, val resolution: String?)
+
+/** Same file = same URL without the query (the "sign" token changes between requests). */
+private fun linkKey(url: String): String =
+    url.substringBefore('#').substringBefore('?').lowercase()
+
+private fun resolutionValue(resolution: String?): Int =
+    resolution?.removeSuffix("p")?.toIntOrNull() ?: 0
+
+/** Turns the real video size (from the <video> element) into a label like "480p". */
+private fun resolutionLabel(width: Int, height: Int): String? {
+    if (height <= 0) return null
+    // Portrait video -> use the width. Wide/cinema video (e.g. 1920x800) -> use 16:9 height.
+    val base = if (width in 1 until height) width else maxOf(height, width * 9 / 16)
+    val standards = listOf(144, 240, 360, 480, 720, 1080, 1440, 2160)
+    val closest = standards.minByOrNull { kotlin.math.abs(it - base) } ?: return null
+    return "${closest}p"
+}
+
 /**
  * Port of the extension's content.js: when the page sends NETMIRROR_CHECK,
  * answer that the extension is installed. Injected at document start.
@@ -72,19 +97,38 @@ private const val DETECT_SCRIPT = """
 })();
 """
 
-// Page helper: hides "extension not enabled" warnings, unlocks download buttons,
-// and reports video links found in the page. Throttled so it does not slow the site.
+// Page helper: hides "extension not enabled" warnings, unlocks download buttons, and reports
+// the video that is loaded in the player together with its real size (width x height).
+// Throttled so it does not slow the site down.
 private const val PAGE_SCRIPT = """
 (function () {
   if (window.__nmPage) return;
   window.__nmPage = true;
-  var sent = {};
   var VIDEO_RE = /\.(m3u8|mp4|mkv|mpd)(\?|#|$)/i;
+  var last = '';
 
-  function send(url) {
-    if (!url || sent[url] || !VIDEO_RE.test(url)) return;
-    sent[url] = 1;
-    try { window.AndroidBridge.onVideoLinkFound(url); } catch (e) {}
+  function reportVideo(v) {
+    var src = v.currentSrc || v.src;
+    if (!src || !VIDEO_RE.test(src)) return;
+    var w = v.videoWidth || 0;
+    var h = v.videoHeight || 0;
+    if (h === 0) return; // metadata not loaded yet
+    var sig = src + '|' + w + 'x' + h;
+    if (sig === last) return; // only report when the video or its quality changes
+    last = sig;
+    try { window.AndroidBridge.onVideoPlaying(src, w, h); } catch (e) {}
+  }
+
+  function scanVideos() {
+    document.querySelectorAll('video').forEach(function (v) {
+      reportVideo(v);
+      if (!v.__nm) {
+        v.__nm = true;
+        ['loadedmetadata', 'resize', 'playing'].forEach(function (ev) {
+          v.addEventListener(ev, function () { reportVideo(v); });
+        });
+      }
+    });
   }
 
   function hideWarnings() {
@@ -111,45 +155,23 @@ private const val PAGE_SCRIPT = """
     });
   }
 
-  function extractVideoSources() {
-    document.querySelectorAll('video, source').forEach(function (el) {
-      send(el.src);
-      send(el.currentSrc);
-    });
-    try {
-      if (window.jwplayer) {
-        var jw = window.jwplayer();
-        if (jw && jw.getPlaylist) {
-          jw.getPlaylist().forEach(function (item) {
-            send(item.file);
-            if (item.sources) item.sources.forEach(function (s) { send(s.file); });
-          });
-        }
-      }
-    } catch (e) {}
-    document.querySelectorAll('script').forEach(function (script) {
-      var content = script.textContent || '';
-      var matches = content.match(/(https?:\/\/[^\s"'`]+\.(m3u8|mp4|mkv|mpd)[^\s"'`]*)/gi);
-      if (matches) matches.forEach(send);
-    });
-  }
-
-  function run() {
+  function cleanup() {
     hideWarnings();
     unlockDownloadButtons();
-    extractVideoSources();
+    scanVideos();
   }
 
   var timer = null;
   function schedule() {
     if (timer) return;
-    timer = setTimeout(function () { timer = null; run(); }, 1500);
+    timer = setTimeout(function () { timer = null; cleanup(); }, 1500);
   }
 
-  run();
-  setTimeout(run, 1000);
-  setTimeout(run, 3000);
-  setTimeout(run, 6000);
+  cleanup();
+  setTimeout(cleanup, 1000);
+  setTimeout(cleanup, 3000);
+  setTimeout(cleanup, 6000);
+  setInterval(scanVideos, 1000); // cheap: only looks at <video> elements
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
 })();
 """
@@ -168,8 +190,8 @@ fun NetMirrorScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
 
-    var capturedLinks by remember { mutableStateOf<List<String>>(emptyList()) }
-    var selectedLink by remember { mutableStateOf<String?>(null) }
+    var capturedLinks by remember { mutableStateOf<List<CapturedLink>>(emptyList()) }
+    var selectedKey by remember { mutableStateOf<String?>(null) }
 
     // Fullscreen video (WebChromeClient.onShowCustomView)
     var customView by remember { mutableStateOf<View?>(null) }
@@ -189,22 +211,39 @@ fun NetMirrorScreen(
         return isVideoUrl(url)
     }
 
-    fun addCapturedLink(url: String) {
-        if (!isVideoUrl(url)) return // the JS bridge is reachable by any frame - validate here
-        if (capturedLinks.any { it.equals(url, ignoreCase = true) }) return
+    // Adds a link, or updates it if the same file is already in the list.
+    fun upsertLink(url: String, resolution: String?, select: Boolean) {
+        val key = linkKey(url)
+        val existing = capturedLinks.firstOrNull { it.key == key }
+        val newResolution = resolution ?: existing?.resolution
+        // Skip no-op updates (the network sends many range requests for the same file).
+        if (existing != null && existing.url == url && existing.resolution == newResolution &&
+            !(select && selectedKey != key)
+        ) return
 
         val wasEmpty = capturedLinks.isEmpty()
-        val newList = (capturedLinks + url)
-            .distinctBy { it.lowercase() }
+        capturedLinks = (capturedLinks.filter { it.key != key } + CapturedLink(key, url, newResolution))
             .sortedWith(
-                compareByDescending<String> { it.contains(".m3u8", ignoreCase = true) }
-                    .thenByDescending { it.length }
+                compareByDescending<CapturedLink> { resolutionValue(it.resolution) }
+                    .thenByDescending { it.url.contains(".m3u8", ignoreCase = true) }
             )
-
-        capturedLinks = newList
-        if (selectedLink == null) selectedLink = newList.firstOrNull()
+        if (select || selectedKey == null) selectedKey = key
         if (wasEmpty) Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
     }
+
+    // From the network: link found, resolution not known yet.
+    fun addCapturedLink(url: String) {
+        if (!isVideoUrl(url)) return
+        upsertLink(url, null, select = false)
+    }
+
+    // From the page: this is the video the player is playing right now, with its real size.
+    fun onVideoPlayingFound(url: String, width: Int, height: Int) {
+        if (!isVideoUrl(url)) return // the JS bridge is reachable by any frame - validate here
+        upsertLink(url, resolutionLabel(width, height), select = true)
+    }
+
+    val selected = capturedLinks.firstOrNull { it.key == selectedKey }
 
     fun exitFullscreen() {
         val act = activity ?: return
@@ -276,7 +315,7 @@ fun NetMirrorScreen(
                 }
 
                 // Captured Link Action Bar
-                selectedLink?.let { link ->
+                selected?.let { current ->
                     Surface(
                         color = Color(0xFF1B5E20),
                         modifier = Modifier.fillMaxWidth()
@@ -287,37 +326,78 @@ fun NetMirrorScreen(
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
                             Text(
-                                text = "Direct Link Captured!",
+                                text = buildString {
+                                    append("Direct Link Captured!")
+                                    current.resolution?.let { append(" ($it)") }
+                                },
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
-                            Text(
-                                text = link,
-                                color = Color(0xFFB9F6CA),
-                                fontSize = 12.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-                            )
+
+                            // Scrollable list: pick which quality to use.
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 120.dp)
+                                    .padding(top = 6.dp, bottom = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(capturedLinks, key = { it.key }) { item ->
+                                    val isSelected = item.key == selectedKey
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (isSelected) Color(0x4400E676) else Color(0x1AFFFFFF)
+                                            )
+                                            .clickable { selectedKey = item.key }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = { selectedKey = item.key },
+                                            colors = RadioButtonDefaults.colors(
+                                                selectedColor = Color(0xFF00E676),
+                                                unselectedColor = Color.White
+                                            )
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = item.resolution ?: "Unknown quality",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp
+                                            )
+                                            Text(
+                                                text = item.url,
+                                                color = Color(0xFFB9F6CA),
+                                                fontSize = 11.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
 
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
-                                    onClick = { onDirectLinkFound(link) },
+                                    onClick = { onDirectLinkFound(current.url) },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
                                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                                 ) {
                                     Text("USE LINK", fontWeight = FontWeight.Bold)
                                 }
 
-                                if (capturedLinks.size > 1) {
-                                    Text(
-                                        text = "${capturedLinks.size} links found",
-                                        color = Color(0xFFB9F6CA),
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.align(Alignment.CenterVertically)
-                                    )
-                                }
+                                Text(
+                                    text = "${capturedLinks.size} link${if (capturedLinks.size == 1) "" else "s"} found",
+                                    color = Color(0xFFB9F6CA),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.align(Alignment.CenterVertically)
+                                )
                             }
                         }
                     }
@@ -341,8 +421,8 @@ fun NetMirrorScreen(
                     // Bridge so JavaScript can send links to Kotlin
                     addJavascriptInterface(object {
                         @JavascriptInterface
-                        fun onVideoLinkFound(url: String) {
-                            post { addCapturedLink(url) }
+                        fun onVideoPlaying(url: String, width: Int, height: Int) {
+                            post { onVideoPlayingFound(url, width, height) }
                         }
                     }, "AndroidBridge")
 
