@@ -319,34 +319,45 @@ fun UraniumTvApp() {
                     navController.popBackStack()
                 }
             )
-        }
-        composable("netmirror") {
-            NetMirrorScreen(
-                onDirectLinkFound = { directLink ->
-                    val clipboard = context
-                        .getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                            as android.content.ClipboardManager
+        }composable(
+    route = "netmirror/{roomCode}",
+    arguments = listOf(
+        navArgument("roomCode") { type = NavType.StringType }
+    )
+) { backStackEntry ->
+    val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
+    val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+    val db = FirebaseDatabase
+        .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+        .reference
+        .child("rooms")
+        .child(roomCode)
 
-                    clipboard.setPrimaryClip(
-                        android.content.ClipData.newPlainText(
-                            "video_link",
-                            directLink
-                        )
-                    )
-
-                    Toast.makeText(
-                        context,
-                        "Direct link copied!",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-                onNavigateBack = {
-                    navController.popBackStack()
-                }
+    NetMirrorScreen(
+        onDirectLinkFound = { directLink ->
+            val updates = mapOf(
+                "videoUrl" to directLink,
+                "position" to 0L,
+                "isPlaying" to true,
+                "lastUpdatedBy" to uid,
+                "lastUpdatedAt" to ServerValue.TIMESTAMP
             )
-        }
 
-    } // closes NavHost
+            db.updateChildren(updates)
+                .addOnSuccessListener {
+                    Toast.makeText(context, "Video added to room!", Toast.LENGTH_SHORT).show()
+                    navController.navigate("watch/$roomCode") {
+                        popUpTo("netmirror/{roomCode}") { inclusive = true }
+                    }
+                }
+                .addOnFailureListener {
+                    Toast.makeText(context, "Failed to add video", Toast.LENGTH_SHORT).show()
+                }
+        },
+        onNavigateBack = { navController.popBackStack() }
+    )
+}
+            } // closes NavHost
 } // closes UraniumTvApp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
