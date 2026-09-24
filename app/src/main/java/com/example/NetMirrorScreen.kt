@@ -1,6 +1,9 @@
 package com.example
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.os.Message
 import android.webkit.*
@@ -8,9 +11,11 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -32,11 +38,14 @@ fun NetMirrorScreen(
     val context = LocalContext.current
 
     var isLoading by remember { mutableStateOf(true) }
-    var foundLink by remember { mutableStateOf<String?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
 
-    // Comprehensive list of ad / tracking / redirect domains
+    // Store captured links (prefer m3u8)
+    var capturedLinks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedLink by remember { mutableStateOf<String?>(null) }
+
+    // Comprehensive ad / tracking / redirect domains
     val blockedDomains = listOf(
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
         "adservice.google", "pagead2.googlesyndication", "ads.", "adnxs.com",
@@ -48,10 +57,34 @@ fun NetMirrorScreen(
         "exoclick.com", "popads.net", "propellerads.com", "adsterra.com",
         "clickadu.com", "juicyads.com", "trafficjunky.com", "adcash.com",
         "adcolony.com", "unityads", "ironsource", "applovin", "vungle",
-        "startapp", "chartboost", "fyber", "smaato", "inmobi"
+        "startapp", "chartboost", "fyber", "smaato", "inmobi",
+        "popcash.net", "adspyglass", "hilltopads", "clickaine", "adright"
     )
 
-    // Handle system back button
+    fun isVideoUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains(".m3u8") ||
+                lower.contains(".mp4") ||
+                lower.contains(".mkv") ||
+                (lower.contains("video") && (lower.startsWith("http://") || lower.startsWith("https://")) &&
+                        !lower.contains("netmirror"))
+    }
+
+    fun addCapturedLink(url: String) {
+        if (capturedLinks.contains(url)) return
+
+        val newList = (capturedLinks + url).distinct()
+            .sortedWith(compareByDescending<String> { it.contains(".m3u8", ignoreCase = true) }
+                .thenByDescending { it.length }) // longer usually = higher quality
+
+        capturedLinks = newList
+        if (selectedLink == null) {
+            selectedLink = newList.firstOrNull()
+        }
+
+        Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
+    }
+
     BackHandler {
         if (canGoBack && webView != null) {
             webView?.goBack()
@@ -83,11 +116,7 @@ fun NetMirrorScreen(
                         if (canGoBack && webView != null) webView?.goBack()
                         else onNavigateBack()
                     }) {
-                        Icon(
-                            Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White
-                        )
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
 
                     Text(
@@ -98,52 +127,76 @@ fun NetMirrorScreen(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Refresh button
                     IconButton(onClick = { webView?.reload() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = Color.White)
                     }
 
-                    // Close button
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                     }
                 }
 
-                // Direct Link Action Bar (appears only when a link is found)
-                if (foundLink != null) {
+                // Direct Link Action Bar
+                if (selectedLink != null) {
                     Surface(
                         color = Color(0xFF1B5E20),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Direct Link Captured!",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
-                                )
-                                Text(
-                                    text = foundLink!!.take(60) + if (foundLink!!.length > 60) "..." else "",
-                                    color = Color(0xFFB9F6CA),
-                                    fontSize = 11.sp,
-                                    maxLines = 1
-                                )
-                            }
+                            Text(
+                                text = "Direct Link Captured!",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = selectedLink!!,
+                                color = Color(0xFFB9F6CA),
+                                fontSize = 12.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+                            )
 
-                            Button(
-                                onClick = { onDirectLinkFound(foundLink!!) },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF00E676)
-                                ),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("USE LINK", fontWeight = FontWeight.Bold)
+                                Button(
+                                    onClick = { onDirectLinkFound(selectedLink!!) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text("USE LINK", fontWeight = FontWeight.Bold)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("video_link", selectedLink))
+                                        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = ButtonDefaults.outlinedButtonBorder.copy(
+                                        brush = androidx.compose.ui.graphics.SolidColor(Color.White)
+                                    )
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Copy")
+                                }
+
+                                if (capturedLinks.size > 1) {
+                                    Text(
+                                        text = "${capturedLinks.size} links found",
+                                        color = Color(0xFFB9F6CA),
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -180,26 +233,23 @@ fun NetMirrorScreen(
                         displayZoomControls = false
                         allowFileAccess = false
                         allowContentAccess = false
+                        cacheMode = WebSettings.LOAD_DEFAULT
                     }
 
-                    // ========== Chrome Client (Block Popups) ==========
+                    // Block all popups
                     webChromeClient = object : WebChromeClient() {
                         override fun onCreateWindow(
                             view: WebView?,
                             isDialog: Boolean,
                             isUserGesture: Boolean,
                             resultMsg: Message?
-                        ): Boolean {
-                            // Completely block all popup windows
-                            return false
-                        }
+                        ): Boolean = false
 
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             isLoading = newProgress < 100
                         }
                     }
 
-                    // ========== WebView Client ==========
                     webViewClient = object : WebViewClient() {
 
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -211,17 +261,19 @@ fun NetMirrorScreen(
                             isLoading = false
                             canGoBack = view?.canGoBack() == true
 
-                            // Inject JavaScript to hide common ad elements
+                            // Aggressive ad hiding + try to surface player sources
                             view?.evaluateJavascript(
                                 """
                                 (function() {
+                                    // Hide common ad containers
                                     var selectors = [
                                         'iframe[src*="ads"]', 'iframe[src*="doubleclick"]',
                                         'iframe[src*="googlesyndication"]', 'div[id*="ad"]',
                                         'div[class*="ad-"]', 'div[class*="ads"]',
                                         'div[class*="banner"]', 'div[class*="popup"]',
                                         '.adsbygoogle', '[id*="google_ads"]',
-                                        '[class*="sponsored"]'
+                                        '[class*="sponsored"]', '[class*="advert"]',
+                                        'div[id*="popup"]', 'div[class*="overlay"]'
                                     ];
                                     selectors.forEach(function(sel) {
                                         document.querySelectorAll(sel).forEach(function(el) {
@@ -229,31 +281,31 @@ fun NetMirrorScreen(
                                             el.remove();
                                         });
                                     });
+
+                                    // Try to expose video sources if the player has them
+                                    try {
+                                        var videos = document.querySelectorAll('video');
+                                        videos.forEach(function(v) {
+                                            if (v.src) console.log('VIDEO_SRC:' + v.src);
+                                            if (v.currentSrc) console.log('VIDEO_SRC:' + v.currentSrc);
+                                        });
+                                    } catch(e) {}
                                 })();
                                 """.trimIndent(),
                                 null
                             )
                         }
 
-                        // Block navigation to other domains
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
                         ): Boolean {
                             val url = request?.url?.toString() ?: return true
-
                             val allowed = url.contains("netmirror.studio", ignoreCase = true) ||
                                     url.contains("netmirror", ignoreCase = true)
-
-                            return if (allowed) {
-                                false // Allow NetMirror
-                            } else {
-                                // Block external redirects
-                                true
-                            }
+                            return !allowed
                         }
 
-                        // Old API support
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             val allowed = url?.contains("netmirror.studio", ignoreCase = true) == true ||
@@ -261,7 +313,6 @@ fun NetMirrorScreen(
                             return !allowed
                         }
 
-                        // Intercept requests: block ads + capture video links
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -274,26 +325,9 @@ fun NetMirrorScreen(
                             }
 
                             // 2. Capture direct video links
-                            val isVideoLink = url.contains(".m3u8", ignoreCase = true) ||
-                                    url.contains(".mp4", ignoreCase = true) ||
-                                    (url.contains("video", ignoreCase = true) &&
-                                            (url.contains("http://") || url.contains("https://")) &&
-                                            !url.contains("netmirror.studio"))
-
-                            if (isVideoLink) {
+                            if (isVideoUrl(url)) {
                                 view?.post {
-                                    // Prefer m3u8 over mp4
-                                    if (foundLink == null ||
-                                        (url.contains(".m3u8", ignoreCase = true) &&
-                                                foundLink?.contains(".m3u8") != true)
-                                    ) {
-                                        foundLink = url
-                                        Toast.makeText(
-                                            context,
-                                            "Direct video link captured!",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
+                                    addCapturedLink(url)
                                 }
                             }
 
