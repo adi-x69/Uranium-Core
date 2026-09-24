@@ -303,19 +303,13 @@ fun UraniumTvApp() {
 
         composable("room/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
-            val selectedVideoId by backStackEntry.savedStateHandle
-                .getStateFlow<String?>("selectedVideoId", null)
-                .collectAsState()
 
             RoomScreen(
                 roomCode = roomCode,
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToSearch = { navController.navigate("search/$roomCode") },
                 onInviteFriends = { navController.navigate("friends?roomCode=$roomCode") },
                 onNavigateToWatch = { navController.navigate("watch/$roomCode") },
                 onNavigateToNetMirror = { navController.navigate("netmirror/$roomCode") },
-                selectedVideoIdFromSearch = selectedVideoId,
-                onVideoIdConsumed = { backStackEntry.savedStateHandle["selectedVideoId"] = null }
             )
         }
 
@@ -324,18 +318,6 @@ fun UraniumTvApp() {
             WatchScreen(
                 roomCode = roomCode,
                 onNavigateBack = { navController.popBackStack() }
-            )
-        }
-
-        composable("search/{roomCode}") { backStackEntry ->
-            val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
-            YouTubeSearchScreen(
-                roomCode = roomCode,
-                onNavigateBack = { navController.popBackStack() },
-                onVideoSelected = { videoId ->
-                    navController.previousBackStackEntry?.savedStateHandle?.set("selectedVideoId", videoId)
-                    navController.popBackStack()
-                }
             )
         }
 
