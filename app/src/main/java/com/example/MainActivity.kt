@@ -71,7 +71,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
 @Composable
 fun UraniumTvApp() {
     val navController = rememberNavController()
@@ -88,7 +87,12 @@ fun UraniumTvApp() {
     }
 
     if (crashMessage != null || auth == null) {
-        Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Text(
                 text = "Startup error:\n\n${crashMessage ?: "auth is null"}",
                 color = MaterialTheme.colorScheme.error
@@ -102,7 +106,7 @@ fun UraniumTvApp() {
     val currentUid = auth.currentUser?.uid ?: ""
     LaunchedEffect(currentUid) {
         if (currentUid.isNotBlank()) {
-            val db = com.google.firebase.database.FirebaseDatabase
+            val db = FirebaseDatabase
                 .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
                 .reference
             db.child("users").child(currentUid).get().addOnSuccessListener { snap ->
@@ -123,21 +127,21 @@ fun UraniumTvApp() {
     }
 
     NavHost(
-        navController = navController, 
+        navController = navController,
         startDestination = startDestination,
         enterTransition = {
-            androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) +
-            androidx.compose.animation.slideInHorizontally(initialOffsetX = { it / 4 })
+            fadeIn(animationSpec = tween(300)) +
+                    slideInHorizontally(initialOffsetX = { it / 4 })
         },
         exitTransition = {
-            androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300))
+            fadeOut(animationSpec = tween(300))
         },
         popEnterTransition = {
-            androidx.compose.animation.fadeIn(animationSpec = androidx.compose.animation.core.tween(300))
+            fadeIn(animationSpec = tween(300))
         },
         popExitTransition = {
-            androidx.compose.animation.fadeOut(animationSpec = androidx.compose.animation.core.tween(300)) +
-            androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it / 4 })
+            fadeOut(animationSpec = tween(300)) +
+                    slideOutHorizontally(targetOffsetX = { it / 4 })
         }
     ) {
         composable("login") {
@@ -155,7 +159,7 @@ fun UraniumTvApp() {
                                 val uid = auth.currentUser?.uid ?: ""
                                 if (uid.isNotBlank()) {
                                     UserProfileStorage.saveUsernameLocally(context, uid, username)
-                                    val db = com.google.firebase.database.FirebaseDatabase
+                                    val db = FirebaseDatabase
                                         .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
                                         .reference
                                     db.child("users").child(uid).get().addOnSuccessListener { snap ->
@@ -166,7 +170,7 @@ fun UraniumTvApp() {
                                         if (!cloudName.isNullOrBlank()) {
                                             UserProfileStorage.saveNameLocally(context, uid, cloudName)
                                             auth.currentUser?.updateProfile(
-                                                com.google.firebase.auth.UserProfileChangeRequest.Builder().setDisplayName(cloudName).build()
+                                                UserProfileChangeRequest.Builder().setDisplayName(cloudName).build()
                                             )
                                         }
                                         UserProfileStorage.saveUsernameLocally(context, uid, cloudUsername)
@@ -184,6 +188,7 @@ fun UraniumTvApp() {
                 }
             )
         }
+
         composable("signup") {
             SignupScreen(
                 onNavigateToLogin = { navController.popBackStack() },
@@ -208,9 +213,9 @@ fun UraniumTvApp() {
                                 UserProfileStorage.saveUsernameLocally(context, uid, cleanUsername)
                                 UserProfileStorage.saveAvatarLocally(context, uid, avatarId)
                                 auth.currentUser?.updateProfile(
-                                    com.google.firebase.auth.UserProfileChangeRequest.Builder().setDisplayName(cleanName).build()
+                                    UserProfileChangeRequest.Builder().setDisplayName(cleanName).build()
                                 )
-                                val db = com.google.firebase.database.FirebaseDatabase
+                                val db = FirebaseDatabase
                                     .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
                                     .reference
                                 val profileUpdates = mapOf(
@@ -242,6 +247,7 @@ fun UraniumTvApp() {
                 }
             )
         }
+
         composable("home") {
             HomeScreen(
                 onNavigateToRoom = { roomCode ->
@@ -258,6 +264,7 @@ fun UraniumTvApp() {
                 }
             )
         }
+
         composable("profile") {
             ProfileScreen(
                 onNavigateBack = { navController.popBackStack() },
@@ -269,6 +276,7 @@ fun UraniumTvApp() {
                 }
             )
         }
+
         composable(
             route = "friends?roomCode={roomCode}",
             arguments = listOf(
@@ -285,6 +293,7 @@ fun UraniumTvApp() {
                 currentRoomCode = roomCodeArg
             )
         }
+
         composable("room/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
             val selectedVideoId by backStackEntry.savedStateHandle
@@ -302,6 +311,7 @@ fun UraniumTvApp() {
                 onVideoIdConsumed = { backStackEntry.savedStateHandle["selectedVideoId"] = null }
             )
         }
+
         composable("watch/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
             WatchScreen(
@@ -309,6 +319,7 @@ fun UraniumTvApp() {
                 onNavigateBack = { navController.popBackStack() }
             )
         }
+
         composable("search/{roomCode}") { backStackEntry ->
             val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
             YouTubeSearchScreen(
@@ -319,45 +330,48 @@ fun UraniumTvApp() {
                     navController.popBackStack()
                 }
             )
-        }composable(
-    route = "netmirror/{roomCode}",
-    arguments = listOf(
-        navArgument("roomCode") { type = NavType.StringType }
-    )
-) { backStackEntry ->
-    val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
-    val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
-    val db = FirebaseDatabase
-        .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
-        .reference
-        .child("rooms")
-        .child(roomCode)
+        }
 
-    NetMirrorScreen(
-        onDirectLinkFound = { directLink ->
-            val updates = mapOf(
-                "videoUrl" to directLink,
-                "position" to 0L,
-                "isPlaying" to true,
-                "lastUpdatedBy" to uid,
-                "lastUpdatedAt" to ServerValue.TIMESTAMP
+        // ====================== NETMIRROR ======================
+        composable(
+            route = "netmirror/{roomCode}",
+            arguments = listOf(
+                navArgument("roomCode") { type = NavType.StringType }
             )
+        ) { backStackEntry ->
+            val roomCode = backStackEntry.arguments?.getString("roomCode") ?: ""
+            val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+            val db = FirebaseDatabase
+                .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+                .reference
+                .child("rooms")
+                .child(roomCode)
 
-            db.updateChildren(updates)
-                .addOnSuccessListener {
-                    Toast.makeText(context, "Video added to room!", Toast.LENGTH_SHORT).show()
-                    navController.navigate("watch/$roomCode") {
-                        popUpTo("netmirror/{roomCode}") { inclusive = true }
-                    }
-                }
-                .addOnFailureListener {
-                    Toast.makeText(context, "Failed to add video", Toast.LENGTH_SHORT).show()
-                }
-        },
-        onNavigateBack = { navController.popBackStack() }
-    )
-}
-            } // closes NavHost
+            NetMirrorScreen(
+                onDirectLinkFound = { directLink ->
+                    val updates = mapOf(
+                        "videoUrl" to directLink,
+                        "position" to 0L,
+                        "isPlaying" to true,
+                        "lastUpdatedBy" to uid,
+                        "lastUpdatedAt" to ServerValue.TIMESTAMP
+                    )
+
+                    db.updateChildren(updates)
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Video added to room!", Toast.LENGTH_SHORT).show()
+                            navController.navigate("watch/$roomCode") {
+                                popUpTo("netmirror/{roomCode}") { inclusive = true }
+                            }
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(context, "Failed to add video", Toast.LENGTH_SHORT).show()
+                        }
+                },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+    } // closes NavHost
 } // closes UraniumTvApp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
