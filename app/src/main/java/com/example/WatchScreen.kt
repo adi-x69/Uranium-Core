@@ -259,6 +259,7 @@ fun WatchScreen(
     var isYouTubeMode by remember { mutableStateOf(false) }
     var currentYtId by remember { mutableStateOf("") }
     var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
+    var lastLoadedYtId by remember { mutableStateOf<String?>(null) }
     var ytCurrentTimeMs by remember { mutableStateOf(0L) }
     var ytDurationMs by remember { mutableStateOf(0L) }
     var isYtBuffering by remember { mutableStateOf(false) }
@@ -346,6 +347,27 @@ fun WatchScreen(
     var lastKnownPosition by remember { mutableStateOf(0L) }
     var lastUpdatedAtSnapshot by remember { mutableStateOf(0L) }
     val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
+
+    // Single source of truth for loading a YouTube video into the player.
+    LaunchedEffect(youtubePlayer, currentYtId, isPlayingState, roomIsPlaying) {
+        val player = youtubePlayer ?: return@LaunchedEffect
+        if (currentYtId.isNotEmpty()) {
+            val shouldPlay = isPlayingState || roomIsPlaying
+            if (currentYtId != lastLoadedYtId) {
+                val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
+                val startSec = (expected / 1000f).coerceAtLeast(0f)
+                if (shouldPlay) player.loadVideo(currentYtId, startSec)
+                else player.cueVideo(currentYtId, startSec)
+                lastLoadedYtId = currentYtId
+            } else {
+                if (shouldPlay) {
+                    player.play()
+                } else {
+                    player.pause()
+                }
+            }
+        }
+    }
 
     // Live position tracking for ExoPlayer (smooth UI slider & timestamps)
     var exoCurrentPositionMs by remember { mutableStateOf(0L) }
@@ -898,17 +920,59 @@ fun WatchScreen(
                         YouTubePlayerView(ctx).apply {
                             enableAutomaticInitialization = false
                             lifecycleOwner.lifecycle.addObserver(this)
+
+                            fun configureInternalWebView(view: android.view.View) {
+                                if (view is android.webkit.WebView) {
+                                    view.settings.mediaPlaybackRequiresUserGesture = false
+                                    view.settings.javaScriptEnabled = true
+                                    view.settings.domStorageEnabled = true
+                                    view.settings.databaseEnabled = true
+                                    view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                }
+                                if (view is android.view.ViewGroup) {
+                                    for (i in 0 until view.childCount) {
+                                        configureInternalWebView(view.getChildAt(i))
+                                    }
+                                }
+                            }
+                            configureInternalWebView(this)
+                            setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
+                                override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) {
+                                    child?.let { configureInternalWebView(it) }
+                                }
+                                override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
+                            })
+
+                            val iFrameOptions = IFramePlayerOptions.Builder()
+                                .controls(0)
+                                .autoplay(1)
+                                .rel(0)
+                                .ivLoadPolicy(3)
+                                .ccLoadPolicy(0)
+                                .origin("https://www.youtube.com")
+                                .build()
+
                             initialize(object : AbstractYouTubePlayerListener() {
                                 override fun onReady(youTubePlayer: YouTubePlayer) {
                                     youtubePlayer = youTubePlayer
+                                    post { configureInternalWebView(this@apply) }
                                     if (currentYtId.isNotEmpty()) {
-                                        val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, ytDurationMs)
+                                        val shouldPlay = isPlayingState || roomIsPlaying
+                                        val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
                                         val startSec = (expected / 1000f).coerceAtLeast(0f)
-                                        if (isPlayingState) {
+                                        if (shouldPlay) {
                                             youTubePlayer.loadVideo(currentYtId, startSec)
                                         } else {
                                             youTubePlayer.cueVideo(currentYtId, startSec)
                                         }
+                                        lastLoadedYtId = currentYtId
+                                    }
+                                }
+
+                                override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
+                                    android.util.Log.e("WatchScreen", "YouTube player error: $error")
+                                    if (error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER && currentYtId.isNotEmpty()) {
+                                        youTubePlayer.cueVideo(currentYtId, 0f)
                                     }
                                 }
 
@@ -954,7 +1018,7 @@ fun WatchScreen(
                                 override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
                                     ytDurationMs = (duration * 1000).toLong()
                                 }
-                            }, IFramePlayerOptions.Builder().controls(0).build())
+                            }, iFrameOptions)
                         }
                     },
                     onRelease = { playerView ->

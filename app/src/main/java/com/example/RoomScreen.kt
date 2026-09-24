@@ -49,10 +49,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 
 fun getYoutubeVideoId(url: String): String? {
     val clean = url.trim()
-    if (clean.length == 11 && !clean.contains("http") && !clean.contains("www") && !clean.contains("/") && !clean.contains("?")) return clean
-    val regex = Regex("(?:youtube(?:-nocookie)?\\.com/(?:[^/]+/.+/|(?:v|e(?:mbed)?)/|.*[?&]v=)|youtu\\.be/|youtube\\.com/shorts/)([^\"&?/\\s]{11})")
-    val match = regex.find(clean)
-    return match?.groupValues?.getOrNull(1)
+    if (clean.length == 11 && !clean.contains("http") && !clean.contains("www") && !clean.contains("/") && !clean.contains("?") && !clean.contains("&")) return clean
+    val patterns = listOf(
+        Regex("""(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:.*[?&]v=|embed/|v/|shorts/|live/))([a-zA-Z0-9_-]{11})"""),
+        Regex("""(?:youtube\.com/live/)([a-zA-Z0-9_-]{11})"""),
+        Regex("""(?:youtu\.be/)([a-zA-Z0-9_-]{11})"""),
+        Regex("""[?&]v=([a-zA-Z0-9_-]{11})""")
+    )
+    for (p in patterns) {
+        val m = p.find(clean)
+        if (m != null) return m.groupValues[1]
+    }
+    return null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
