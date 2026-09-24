@@ -61,7 +61,7 @@ fun RoomScreen(
     roomCode: String,
     onNavigateBack: () -> Unit,
     onInviteFriends: () -> Unit,
-    onNavigateToWatch: () -> Unit,
+    onNavigateToWatch: (isYouTube: Boolean) -> Unit,
     onNavigateToNetMirror: () -> Unit,          // ← New parameter
 ) {
     val context = LocalContext.current
@@ -173,7 +173,7 @@ fun RoomScreen(
 
                 if (videoUrl.isNotEmpty() && isPlaying && !hasAutoNavigatedRemote) {
                     hasAutoNavigatedRemote = true
-                    onNavigateToWatch()
+                    onNavigateToWatch(getYoutubeVideoId(videoUrl) != null)
                 }
             }
 
@@ -225,7 +225,7 @@ fun RoomScreen(
                             recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
 
                             hasVideo = true
-                            onNavigateToWatch()
+                            onNavigateToWatch(isYt)
                         }
                     },
                     onPlayWeb = {
@@ -245,7 +245,7 @@ fun RoomScreen(
                             recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
 
                             hasVideo = true
-                            onNavigateToWatch()
+                            onNavigateToWatch(isYt)
                         }
                     }
                 )
@@ -276,7 +276,7 @@ fun RoomScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     FuturisticHazardButton(
                         text = "ENTER WATCH ROOM",
-                        onClick = onNavigateToWatch,
+                        onClick = { onNavigateToWatch(getYoutubeVideoId(currentKnownUrl) != null) },
                         modifier = Modifier.padding(horizontal = 16.dp),
                         gradient = listOf(NeonCrimson, NeonHazardAmber, NeonCyberCyan)
                     )
