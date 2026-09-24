@@ -116,7 +116,7 @@ dependencies {
   implementation("androidx.media3:media3-exoplayer:1.3.1")
   implementation("androidx.media3:media3-ui:1.3.1")
   implementation("androidx.webkit:webkit:1.11.0")
-  implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.1")
+  implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

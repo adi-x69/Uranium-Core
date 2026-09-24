@@ -349,23 +349,15 @@ fun WatchScreen(
     val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
 
     // Single source of truth for loading a YouTube video into the player.
-    LaunchedEffect(youtubePlayer, currentYtId, isPlayingState, roomIsPlaying) {
+    LaunchedEffect(youtubePlayer, currentYtId) {
         val player = youtubePlayer ?: return@LaunchedEffect
-        if (currentYtId.isNotEmpty()) {
+        if (currentYtId.isNotEmpty() && currentYtId != lastLoadedYtId) {
             val shouldPlay = isPlayingState || roomIsPlaying
-            if (currentYtId != lastLoadedYtId) {
-                val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
-                val startSec = (expected / 1000f).coerceAtLeast(0f)
-                if (shouldPlay) player.loadVideo(currentYtId, startSec)
-                else player.cueVideo(currentYtId, startSec)
-                lastLoadedYtId = currentYtId
-            } else {
-                if (shouldPlay) {
-                    player.play()
-                } else {
-                    player.pause()
-                }
-            }
+            val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
+            val startSec = (expected / 1000f).coerceAtLeast(0f)
+            if (shouldPlay) player.loadVideo(currentYtId, startSec)
+            else player.cueVideo(currentYtId, startSec)
+            lastLoadedYtId = currentYtId
         }
     }
 
@@ -565,6 +557,7 @@ fun WatchScreen(
                         ytCurrentTimeMs = targetPosition
                         if (isPlaying) youtubePlayer?.loadVideo(ytId, targetPosition / 1000f)
                         else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
+                        lastLoadedYtId = ytId
                     } else if (!isSelfEcho) {
                         val drift = abs(ytCurrentTimeMs - targetPosition)
                         if (drift > 1500L && !isUserSeeking) {
@@ -943,38 +936,41 @@ fun WatchScreen(
                                 override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
                             })
 
-                            val iFrameOptions = IFramePlayerOptions.Builder()
+                            val iFrameOptions = IFramePlayerOptions.Builder(ctx)
                                 .controls(0)
                                 .autoplay(1)
                                 .rel(0)
                                 .ivLoadPolicy(3)
                                 .ccLoadPolicy(0)
-                                .origin("https://www.youtube.com")
                                 .build()
 
-                            initialize(object : AbstractYouTubePlayerListener() {
-                                override fun onReady(youTubePlayer: YouTubePlayer) {
-                                    youtubePlayer = youTubePlayer
-                                    post { configureInternalWebView(this@apply) }
-                                    if (currentYtId.isNotEmpty()) {
-                                        val shouldPlay = isPlayingState || roomIsPlaying
-                                        val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
-                                        val startSec = (expected / 1000f).coerceAtLeast(0f)
-                                        if (shouldPlay) {
-                                            youTubePlayer.loadVideo(currentYtId, startSec)
-                                        } else {
-                                            youTubePlayer.cueVideo(currentYtId, startSec)
+                            initialize(
+                                youTubePlayerListener = object : AbstractYouTubePlayerListener() {
+                                    override fun onReady(youTubePlayer: YouTubePlayer) {
+                                        youtubePlayer = youTubePlayer
+                                        youTubePlayer.unMute()
+                                        youTubePlayer.setVolume(100)
+                                        post { configureInternalWebView(this@apply) }
+                                        if (currentYtId.isNotEmpty()) {
+                                            val shouldPlay = isPlayingState || roomIsPlaying
+                                            val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
+                                            val startSec = (expected / 1000f).coerceAtLeast(0f)
+                                            if (shouldPlay) {
+                                                youTubePlayer.loadVideo(currentYtId, startSec)
+                                            } else {
+                                                youTubePlayer.cueVideo(currentYtId, startSec)
+                                            }
+                                            lastLoadedYtId = currentYtId
                                         }
-                                        lastLoadedYtId = currentYtId
                                     }
-                                }
 
-                                override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
-                                    android.util.Log.e("WatchScreen", "YouTube player error: $error")
-                                    if (error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER && currentYtId.isNotEmpty()) {
-                                        youTubePlayer.cueVideo(currentYtId, 0f)
+                                    override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
+                                        android.util.Log.e("WatchScreen", "YouTube player error: $error")
+                                        if ((error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER ||
+                                             error == PlayerConstants.PlayerError.REQUEST_MISSING_HTTP_REFERER) && currentYtId.isNotEmpty()) {
+                                            youTubePlayer.cueVideo(currentYtId, 0f)
+                                        }
                                     }
-                                }
 
                                  override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
                                     when (state) {
@@ -1018,8 +1014,11 @@ fun WatchScreen(
                                 override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
                                     ytDurationMs = (duration * 1000).toLong()
                                 }
-                            }, iFrameOptions)
-                        }
+                            },
+                            handleNetworkEvents = false,
+                            playerOptions = iFrameOptions
+                        )
+                    }
                     },
                     onRelease = { playerView ->
                         lifecycleOwner.lifecycle.removeObserver(playerView)
