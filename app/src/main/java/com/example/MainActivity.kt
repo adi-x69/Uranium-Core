@@ -297,7 +297,7 @@ fun UraniumTvApp() {
                 onNavigateToSearch = { navController.navigate("search/$roomCode") },
                 onInviteFriends = { navController.navigate("friends?roomCode=$roomCode") },
                 onNavigateToWatch = { navController.navigate("watch/$roomCode") },
-                onNavigateToNetMirror = { navController.navigate("netmirror") },
+                onNavigateToNetMirror = { navController.navigate("netmirror/$roomCode") },
                 selectedVideoIdFromSearch = selectedVideoId,
                 onVideoIdConsumed = { backStackEntry.savedStateHandle["selectedVideoId"] = null }
             )
