@@ -41,24 +41,35 @@ fun NetMirrorScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
 
-    // Store captured links (prefer m3u8)
     var capturedLinks by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedLink by remember { mutableStateOf<String?>(null) }
 
-    // Comprehensive ad / tracking / redirect domains
+    // Smart (less detectable) block list
     val blockedDomains = listOf(
-        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-        "adservice.google", "pagead2.googlesyndication", "ads.", "adnxs.com",
-        "facebook.net", "scorecardresearch.com", "outbrain.com", "taboola.com",
-        "criteo.com", "pubmatic.com", "openx.net", "rubiconproject.com",
-        "moatads.com", "amazon-adsystem.com", "adsafeprotected.com",
-        "googletagmanager.com", "googletagservices.com", "google-analytics.com",
-        "hotjar.com", "clarity.ms", "mouseflow.com", "quantserve.com",
-        "exoclick.com", "popads.net", "propellerads.com", "adsterra.com",
-        "clickadu.com", "juicyads.com", "trafficjunky.com", "adcash.com",
-        "adcolony.com", "unityads", "ironsource", "applovin", "vungle",
-        "startapp", "chartboost", "fyber", "smaato", "inmobi",
-        "popcash.net", "adspyglass", "hilltopads", "clickaine", "adright"
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "pagead2.googlesyndication",
+        "adservice.google",
+        "adnxs.com",
+        "amazon-adsystem.com",
+        "scorecardresearch.com",
+        "outbrain.com",
+        "taboola.com",
+        "criteo.com",
+        "pubmatic.com",
+        "openx.net",
+        "rubiconproject.com",
+        "moatads.com",
+        "exoclick.com",
+        "popads.net",
+        "propellerads.com",
+        "adsterra.com",
+        "clickadu.com",
+        "juicyads.com",
+        "trafficjunky.com",
+        "popcash.net",
+        "adspyglass.com"
     )
 
     fun isVideoUrl(url: String): Boolean {
@@ -66,16 +77,18 @@ fun NetMirrorScreen(
         return lower.contains(".m3u8") ||
                 lower.contains(".mp4") ||
                 lower.contains(".mkv") ||
-                (lower.contains("video") && (lower.startsWith("http://") || lower.startsWith("https://")) &&
-                        !lower.contains("netmirror"))
+                (lower.contains("video") && lower.contains("http") && !lower.contains("netmirror"))
     }
 
     fun addCapturedLink(url: String) {
-        if (capturedLinks.contains(url)) return
+        if (capturedLinks.any { it.equals(url, ignoreCase = true) }) return
 
-        val newList = (capturedLinks + url).distinct()
-            .sortedWith(compareByDescending<String> { it.contains(".m3u8", ignoreCase = true) }
-                .thenByDescending { it.length }) // longer usually = higher quality
+        val newList = (capturedLinks + url)
+            .distinctBy { it.lowercase() }
+            .sortedWith(
+                compareByDescending<String> { it.contains(".m3u8", ignoreCase = true) }
+                    .thenByDescending { it.length }
+            )
 
         capturedLinks = newList
         if (selectedLink == null) {
@@ -98,8 +111,7 @@ fun NetMirrorScreen(
             .fillMaxSize()
             .background(Color(0xFF0B0E18))
     ) {
-
-        // ====================== TOP BAR ======================
+        // ================= TOP BAR =================
         Surface(
             color = Color(0xFF12151F),
             tonalElevation = 6.dp,
@@ -136,7 +148,7 @@ fun NetMirrorScreen(
                     }
                 }
 
-                // Direct Link Action Bar
+                // Captured Link Action Bar
                 if (selectedLink != null) {
                     Surface(
                         color = Color(0xFF1B5E20),
@@ -162,10 +174,7 @@ fun NetMirrorScreen(
                                 modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
                             )
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = { onDirectLinkFound(selectedLink!!) },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
@@ -174,27 +183,12 @@ fun NetMirrorScreen(
                                     Text("USE LINK", fontWeight = FontWeight.Bold)
                                 }
 
-                                OutlinedButton(
-                                    onClick = {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        clipboard.setPrimaryClip(ClipData.newPlainText("video_link", selectedLink))
-                                        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-                                    },
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                                    border = ButtonDefaults.outlinedButtonBorder.copy(
-                                        brush = androidx.compose.ui.graphics.SolidColor(Color.White)
-                                    )
-                                ) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Copy")
-                                }
-
                                 if (capturedLinks.size > 1) {
                                     Text(
                                         text = "${capturedLinks.size} links found",
                                         color = Color(0xFFB9F6CA),
-                                        fontSize = 12.sp
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.align(Alignment.CenterVertically)
                                     )
                                 }
                             }
@@ -204,7 +198,6 @@ fun NetMirrorScreen(
             }
         }
 
-        // Progress Indicator
         if (isLoading) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
@@ -212,7 +205,7 @@ fun NetMirrorScreen(
             )
         }
 
-        // ====================== WEBVIEW ======================
+        // ================= WEBVIEW =================
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
@@ -225,7 +218,8 @@ fun NetMirrorScreen(
                         mediaPlaybackRequiresUserGesture = false
                         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         userAgentString =
-                            "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                            "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 " +
+                                    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                         loadWithOverviewMode = true
                         useWideViewPort = true
                         setSupportZoom(true)
@@ -236,7 +230,7 @@ fun NetMirrorScreen(
                         cacheMode = WebSettings.LOAD_DEFAULT
                     }
 
-                    // Block all popups
+                    // Block popups completely
                     webChromeClient = object : WebChromeClient() {
                         override fun onCreateWindow(
                             view: WebView?,
@@ -261,35 +255,42 @@ fun NetMirrorScreen(
                             isLoading = false
                             canGoBack = view?.canGoBack() == true
 
-                            // Aggressive ad hiding + try to surface player sources
+                            // Very strong anti-detection + cleanup script
                             view?.evaluateJavascript(
                                 """
                                 (function() {
-                                    // Hide common ad containers
-                                    var selectors = [
-                                        'iframe[src*="ads"]', 'iframe[src*="doubleclick"]',
-                                        'iframe[src*="googlesyndication"]', 'div[id*="ad"]',
-                                        'div[class*="ad-"]', 'div[class*="ads"]',
-                                        'div[class*="banner"]', 'div[class*="popup"]',
-                                        '.adsbygoogle', '[id*="google_ads"]',
-                                        '[class*="sponsored"]', '[class*="advert"]',
-                                        'div[id*="popup"]', 'div[class*="overlay"]'
-                                    ];
-                                    selectors.forEach(function(sel) {
-                                        document.querySelectorAll(sel).forEach(function(el) {
-                                            el.style.display = 'none';
-                                            el.remove();
+                                    function hideAdblockWarning() {
+                                        // Hide any element that contains "AdBlocker Detected"
+                                        var all = document.querySelectorAll('div, section, h1, h2, h3, p, span');
+                                        all.forEach(function(el) {
+                                            var text = (el.innerText || '').toLowerCase();
+                                            if (text.includes('adblocker detected') || 
+                                                text.includes('ad blocker detected') ||
+                                                text.includes('disable your adblock')) {
+                                                el.style.display = 'none';
+                                                if (el.parentElement) el.parentElement.style.display = 'none';
+                                            }
                                         });
-                                    });
 
-                                    // Try to expose video sources if the player has them
-                                    try {
-                                        var videos = document.querySelectorAll('video');
-                                        videos.forEach(function(v) {
-                                            if (v.src) console.log('VIDEO_SRC:' + v.src);
-                                            if (v.currentSrc) console.log('VIDEO_SRC:' + v.currentSrc);
+                                        // Hide common adblock overlay classes/ids
+                                        var selectors = [
+                                            '[class*="adblock"]', '[id*="adblock"]',
+                                            '[class*="ad-block"]', '[id*="ad-block"]',
+                                            '[class*="blocker"]', '[id*="blocker"]',
+                                            '.adsbygoogle', 'iframe[src*="ads"]'
+                                        ];
+                                        selectors.forEach(function(sel) {
+                                            document.querySelectorAll(sel).forEach(function(el) {
+                                                el.style.display = 'none';
+                                                el.remove();
+                                            });
                                         });
-                                    } catch(e) {}
+                                    }
+
+                                    hideAdblockWarning();
+                                    // Run again after a short delay (in case it appears late)
+                                    setTimeout(hideAdblockWarning, 800);
+                                    setTimeout(hideAdblockWarning, 2000);
                                 })();
                                 """.trimIndent(),
                                 null
@@ -301,15 +302,13 @@ fun NetMirrorScreen(
                             request: WebResourceRequest?
                         ): Boolean {
                             val url = request?.url?.toString() ?: return true
-                            val allowed = url.contains("netmirror.studio", ignoreCase = true) ||
-                                    url.contains("netmirror", ignoreCase = true)
+                            val allowed = url.contains("netmirror", ignoreCase = true)
                             return !allowed
                         }
 
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                            val allowed = url?.contains("netmirror.studio", ignoreCase = true) == true ||
-                                    url?.contains("netmirror", ignoreCase = true) == true
+                            val allowed = url?.contains("netmirror", ignoreCase = true) == true
                             return !allowed
                         }
 
@@ -319,12 +318,14 @@ fun NetMirrorScreen(
                         ): WebResourceResponse? {
                             val url = request?.url?.toString() ?: return null
 
-                            // 1. Block ad domains
-                            if (blockedDomains.any { domain -> url.contains(domain, ignoreCase = true) }) {
+                            // Smart ad blocking
+                            if (blockedDomains.any { domain ->
+                                    url.contains(domain, ignoreCase = true)
+                                }) {
                                 return WebResourceResponse("text/plain", "utf-8", null)
                             }
 
-                            // 2. Capture direct video links
+                            // Capture real video links
                             if (isVideoUrl(url)) {
                                 view?.post {
                                     addCapturedLink(url)
