@@ -45,6 +45,7 @@ import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 fun getYoutubeVideoId(url: String): String? {
     val clean = url.trim()
@@ -62,6 +63,7 @@ fun RoomScreen(
     onNavigateToSearch: () -> Unit,
     onInviteFriends: () -> Unit,
     onNavigateToWatch: () -> Unit,
+    onNavigateToNetMirror: () -> Unit,          // ← New parameter
     selectedVideoIdFromSearch: String?,
     onVideoIdConsumed: () -> Unit
 ) {
@@ -78,10 +80,6 @@ fun RoomScreen(
     var ytInputUrl by remember { mutableStateOf("") }
     var webInputUrl by remember { mutableStateOf("") }
 
-    // ---- Room-entry join notifications (separate from WatchScreen's own
-    // participants/join-leave banner system, which stays as-is). Uses its
-    // own "roomPresence" node so entering/leaving RoomScreen never triggers
-    // WatchScreen's banners and vice versa. ----
     var myUsername by remember { mutableStateOf(UserProfileStorage.getCachedUsername(context, uid).ifEmpty { "Someone" }) }
     var hostUid by remember { mutableStateOf("") }
     var hostUsername by remember { mutableStateOf("") }
@@ -123,7 +121,6 @@ fun RoomScreen(
         }
     }
 
-    // "You joined <host>'s room" - shown once to me, only if I'm not the host.
     LaunchedEffect(uid, hostUid, hostUsername) {
         if (uid.isNotEmpty() && hostUid.isNotEmpty() && uid != hostUid && !hasShownSelfJoinToast) {
             hasShownSelfJoinToast = true
@@ -131,8 +128,6 @@ fun RoomScreen(
         }
     }
 
-    // "<username> has joined the room" - shown to everyone already present
-    // when someone new shows up.
     DisposableEffect(roomCode, uid) {
         val presenceRootRef = db.child("roomPresence")
         val listener = object : ChildEventListener {
@@ -180,7 +175,6 @@ fun RoomScreen(
         }
     }
 
-    // Setup Firebase listener
     DisposableEffect(roomCode) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -198,7 +192,6 @@ fun RoomScreen(
                     }
                 }
 
-                // If we updated this ourselves, don't loop back our own state
                 if (lastUpdatedBy == uid) return
 
                 if (videoUrl.isNotEmpty() && isPlaying && !hasAutoNavigatedRemote) {
@@ -281,8 +274,30 @@ fun RoomScreen(
                     }
                 )
 
+                // ========== NETMIRROR BUTTON ==========
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onNavigateToNetMirror,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF00C853)
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(52.dp)
+                ) {
+                    Text(
+                        text = "Browse NetMirror",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = Color.White
+                    )
+                }
+
                 if (hasVideo) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     FuturisticHazardButton(
                         text = "ENTER WATCH ROOM",
                         onClick = onNavigateToWatch,
@@ -290,21 +305,14 @@ fun RoomScreen(
                         gradient = listOf(NeonCrimson, NeonHazardAmber, NeonCyberCyan)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
+                } else {
+                    Spacer(modifier = Modifier.height(20.dp))
                 }
-            } // Close Column
+            }
         }
     }
 }
 
-/**
- * The reactor-skinned room screen: one flat mockup image used as the background
- * (frame, glowing pills, decorative DNA/decay-chain art all baked in), with real
- * interactive elements positioned on top by fraction of the hero's own width/height
- * - same approach as the Home screen hero. The one difference: this mockup had the
- * room code ("EGY4U6") baked directly into the art as example text, so that patch of
- * background was painted over with matching stone texture and is replaced here by a
- * real "Room: $roomCode" Text so it's correct for every room, not just the example.
- */
 @Composable
 private fun ReactorRoomHero(
     roomCode: String,
@@ -333,10 +341,8 @@ private fun ReactorRoomHero(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Futuristic cyber scanner radar beam sweeping the reactor room
         FuturisticScannerOverlay()
 
-        // DNA Animation Overlay
         val context = LocalContext.current
         val imageLoader = remember {
             coil.ImageLoader.Builder(context)
@@ -373,7 +379,7 @@ private fun ReactorRoomHero(
                 .clickable(onClick = onNavigateBack)
         )
 
-        // Real room code, replacing the patched-out example text
+        // Room code
         Text(
             text = "Room: $roomCode",
             color = Color.White,
@@ -516,11 +522,5 @@ private fun ReactorRoomHero(
                 .size(w * 0.2635f, h * 0.0558f)
                 .clickable(onClick = onPlayWeb)
         )
-        Box(
-            modifier = Modifier
-            .offset(x = w * 0.7126f, y = h * 0.2762f)
-            .size(w * 0.2635f, h * 0.0558f)
-            .clickable(onClick = onPlayWeb)
-          )
     }
 }
