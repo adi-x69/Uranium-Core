@@ -113,10 +113,8 @@ fun NetMirrorScreen(
         }
     }
 
-    // ================= HEAVY JAVASCRIPT INJECTION =================
     val heavyInjectionScript = """
         (function() {
-            // Fake extension presence
             window.chrome = window.chrome || {};
             window.chrome.runtime = window.chrome.runtime || {};
             window.chrome.runtime.id = "fake-extension-id";
@@ -211,25 +209,25 @@ fun NetMirrorScreen(
             unlockDownloadButtons();
             extractVideoSources();
 
-            setTimeout(() => {
+            setTimeout(function() {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
                 extractVideoSources();
             }, 1000);
 
-            setTimeout(() => {
+            setTimeout(function() {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
                 extractVideoSources();
             }, 3000);
 
-            setTimeout(() => {
+            setTimeout(function() {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
                 extractVideoSources();
             }, 6000);
 
-            const observer = new MutationObserver(() => {
+            const observer = new MutationObserver(function() {
                 removeExtensionWarnings();
                 unlockDownloadButtons();
                 extractVideoSources();
@@ -253,7 +251,6 @@ fun NetMirrorScreen(
             .fillMaxSize()
             .background(Color(0xFF0B0E18))
     ) {
-        // ================= TOP BAR =================
         Surface(
             color = Color(0xFF12151F),
             tonalElevation = 6.dp,
@@ -290,7 +287,6 @@ fun NetMirrorScreen(
                     }
                 }
 
-                // ================= SCROLLABLE CAPTURED LINKS =================
                 if (capturedLinks.isNotEmpty()) {
                     Surface(
                         color = Color(0xFF1B5E20),
@@ -367,7 +363,6 @@ fun NetMirrorScreen(
             )
         }
 
-        // ================= WEBVIEW =================
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
