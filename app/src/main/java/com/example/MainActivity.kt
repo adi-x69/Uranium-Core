@@ -322,15 +322,31 @@ fun UraniumTvApp() {
         composable("netmirror") {
             NetMirrorScreen(
                 onDirectLinkFound = { directLink ->
-                    Toast.makeText(context, "Link captured:\n$directLink", Toast.LENGTH_LONG).show()
+                    val clipboard = context
+                        .getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                            as android.content.ClipboardManager
+
+                    clipboard.setPrimaryClip(
+                        android.content.ClipData.newPlainText(
+                            "video_link",
+                            directLink
+                        )
+                    )
+
+                    Toast.makeText(
+                        context,
+                        "Direct link copied!",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 },
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
             )
-        }   // ← This closes the composable("netmirror")
+        }
 
-    }       // ← This closes the NavHost
-}           // ← This closes UraniumTvApp
-
+    } // closes NavHost
+} // closes UraniumTvApp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
