@@ -102,6 +102,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -269,10 +270,18 @@ fun WatchScreen(
     val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
     var isUserSeeking by remember { mutableStateOf(false) }
 
+    // Holds the URL of the video currently loaded, so every request (playlist, segments,
+    // subtitles) gets the Referer/User-Agent that match the main video URL.
+    val currentVideoUrl = remember { java.util.concurrent.atomic.AtomicReference("") }
+
     val exoPlayer = remember {
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
+        val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setDefaultRequestProperties(mapOf("Referer" to AppConfig.VIDEO_REFERER))
+        val dataSourceFactory = ResolvingDataSource.Factory(httpFactory) { spec ->
+            val headers = AppConfig.resolveVideoHeaders(currentVideoUrl.get())
+                .ifEmpty { AppConfig.resolveVideoHeaders(spec.uri.toString()) }
+            if (headers.isEmpty()) spec else spec.withAdditionalHeaders(headers)
+        }
         val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
             .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
             .setUsage(androidx.media3.common.C.USAGE_MEDIA)
@@ -543,6 +552,7 @@ fun WatchScreen(
                     isYouTubeMode = false
                     val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
                     if (currentMediaUri != videoUrl) {
+                        currentVideoUrl.set(videoUrl)
                         exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = isPlaying
