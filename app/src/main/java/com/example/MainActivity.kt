@@ -55,6 +55,13 @@ import com.example.ui.theme.bouncyClick
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.DisplayFontFamily
 import com.google.firebase.auth.FirebaseAuth
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
+import com.google.firebase.auth.UserProfileChangeRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
