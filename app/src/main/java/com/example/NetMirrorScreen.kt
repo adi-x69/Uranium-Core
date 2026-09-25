@@ -45,6 +45,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.example.ui.theme.AbyssOutline
@@ -392,9 +393,9 @@ fun NetMirrorScreen(
     var customView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    // Pages the WebView is allowed to navigate to (NetMirror + the sites in the referer rules).
+    // Pages the WebView is allowed to navigate to (NetMirror + Cloudflare challenges + the sites in the referer rules).
     val allowedHostHints = remember {
-        listOf("netmirror") +
+        listOf("netmirror", "cloudflare", "challenges", "turnstile", "recaptcha", "hcaptcha") +
             AppConfig.REFERER_RULES.keys +
             AppConfig.REFERER_RULES.values.mapNotNull { runCatching { Uri.parse(it).host }.getOrNull() }
     }
@@ -691,6 +692,9 @@ fun NetMirrorScreen(
                         allowContentAccess = false
                         cacheMode = WebSettings.LOAD_DEFAULT
                         javaScriptCanOpenWindowsAutomatically = false
+                        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+                            WebSettingsCompat.setSafeBrowsingEnabled(this, true)
+                        }
                     }
 
                     // Extension's content.js reply - runs before the page's own scripts.
@@ -763,6 +767,25 @@ fun NetMirrorScreen(
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             return url == null || !isAllowedNavigation(url)
+                        }
+
+                        override fun onSafeBrowsingHit(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            threatType: Int,
+                            callback: SafeBrowsingResponse?
+                        ) {
+                            // Protect the user by routing back to safety if threat is detected
+                            callback?.backToSafety(true)
+                        }
+
+                        override fun onReceivedSslError(
+                            view: WebView?,
+                            handler: SslErrorHandler?,
+                            error: android.net.http.SslError?
+                        ) {
+                            // Do not bypass invalid SSL certificates to prevent MITM attacks
+                            handler?.cancel()
                         }
 
                         // One interceptor, three steps in order:

@@ -44,6 +44,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SignalWifiOff
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
@@ -119,6 +121,8 @@ import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.Abs
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.options.IFramePlayerOptions
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.random.Random
 import java.text.SimpleDateFormat
@@ -258,12 +262,46 @@ fun YouTubeWatchScreen(
     // ---- Video sync state (mirrors RoomScreen's model) ----
     var isYouTubeMode by remember { mutableStateOf(true) }
     var currentYtId by remember { mutableStateOf("") }
+    var videoTitle by remember { mutableStateOf("YouTube Video") }
     var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
     var lastLoadedYtId by remember { mutableStateOf<String?>(null) }
-    // YouTube's IFrame API removed manual quality control in 2019-2021 (calls to
-    // setPlaybackQuality are now server-side no-ops) — this only reflects the
-    // resolution YouTube auto-selected, it can't be used to force one.
-    var currentQualityLabel by remember { mutableStateOf<String?>(null) }
+    var currentQualityLabel by remember { mutableStateOf<String?>("Auto") }
+    var internalWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    var isSettingsOpen by remember { mutableStateOf(false) }
+
+    fun applyYouTubeQuality(qualityKey: String) {
+        val qualityCode = when (qualityKey) {
+            "1080p" -> "hd1080"
+            "720p" -> "hd720"
+            "480p" -> "large"
+            "360p" -> "medium"
+            "240p" -> "small"
+            else -> "default"
+        }
+        currentQualityLabel = when (qualityKey) {
+            "1080p" -> "1080p"
+            "720p" -> "720p"
+            "480p" -> "480p"
+            "360p" -> "360p"
+            "240p" -> "240p"
+            else -> "Auto"
+        }
+        val js = """
+            (function() {
+                try {
+                    if (typeof player !== 'undefined' && player) {
+                        if (typeof player.setPlaybackQuality === 'function') {
+                            player.setPlaybackQuality('$qualityCode');
+                        }
+                        if (typeof player.setPlaybackQualityRange === 'function') {
+                            player.setPlaybackQualityRange('$qualityCode', '$qualityCode');
+                        }
+                    }
+                } catch(e) {}
+            })();
+        """.trimIndent()
+        internalWebView?.evaluateJavascript(js, null)
+    }
     var ytCurrentTimeMs by remember { mutableStateOf(0L) }
     var ytDurationMs by remember { mutableStateOf(0L) }
     var isYtBuffering by remember { mutableStateOf(false) }
@@ -274,6 +312,33 @@ fun YouTubeWatchScreen(
     var controlsUnlocked by remember { mutableStateOf(false) }
     val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
     var isUserSeeking by remember { mutableStateOf(false) }
+
+    // Fetch video title directly from YouTube oEmbed API whenever currentYtId changes
+    LaunchedEffect(currentYtId, canControl) {
+        if (currentYtId.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val url = java.net.URL("https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$currentYtId&format=json")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    if (conn.responseCode == 200) {
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        val json = org.json.JSONObject(body)
+                        val fetched = json.optString("title", "")
+                        if (fetched.isNotEmpty()) {
+                            withContext(Dispatchers.Main) {
+                                videoTitle = fetched
+                                if (canControl) {
+                                    db.child("videoTitle").setValue(fetched)
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     // Load the saved header rules / Pause switch once before the player is built.
     remember { HeaderSettings.ensureLoaded(context) }
@@ -430,14 +495,14 @@ fun YouTubeWatchScreen(
         }
     }
 
-    // Background drift monitor (checks every 3s, auto-catches up without micro-stutter)
+    // Background drift monitor (checks every 3.5s, auto-catches up without micro-stutter)
     LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
         if (!isPlayingState || isUserSeeking) {
             showSyncNowButton = false
             return@LaunchedEffect
         }
         while (true) {
-            delay(3000)
+            delay(3500)
             if (!isPlayingState || isUserSeeking) break
             val isBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
             if (!isBuffering) {
@@ -445,18 +510,23 @@ fun YouTubeWatchScreen(
                 val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
                 val current = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition
                 val drift = abs(current - expected)
-                if (drift in 1500L..5000L) {
-                    if (isYouTubeMode) {
+                if (isYouTubeMode) {
+                    // For YouTube, avoid frequent micro-seeks that reset buffering chunks.
+                    // Only auto-seek if heavily drifted (> 8000ms), otherwise let it stream smoothly.
+                    if (drift > 8000L) {
                         youtubePlayer?.seekTo(expected / 1000f)
                         ytCurrentTimeMs = expected
-                    } else {
-                        exoPlayer.seekTo(expected)
                     }
-                    showSyncNowButton = false
-                } else if (drift > 5000L) {
-                    showSyncNowButton = true
+                    showSyncNowButton = drift > 5000L
                 } else {
-                    showSyncNowButton = false
+                    if (drift in 1500L..5000L) {
+                        exoPlayer.seekTo(expected)
+                        showSyncNowButton = false
+                    } else if (drift > 5000L) {
+                        showSyncNowButton = true
+                    } else {
+                        showSyncNowButton = false
+                    }
                 }
             }
         }
@@ -524,12 +594,18 @@ fun YouTubeWatchScreen(
 
     // Mirror room state
     var prevRoomPlaying by remember { mutableStateOf<Boolean?>(null) }
+    var prevRemoteUpdatedAt by remember { mutableStateOf(0L) }
     DisposableEffect(roomCode) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (!snapshot.exists()) return
                 hostUid = snapshot.child("hostUid").getValue(String::class.java) ?: hostUid
                 controlsUnlocked = snapshot.child("controlsUnlocked").getValue(Boolean::class.java) ?: false
+
+                val remoteTitle = snapshot.child("videoTitle").getValue(String::class.java)
+                if (!remoteTitle.isNullOrEmpty()) {
+                    videoTitle = remoteTitle
+                }
 
                 val lastUpdatedBy = snapshot.child("lastUpdatedBy").getValue(String::class.java) ?: ""
                 val isSelfEcho = lastUpdatedBy == uid
@@ -564,13 +640,21 @@ fun YouTubeWatchScreen(
                         else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
                         lastLoadedYtId = ytId
                     } else if (!isSelfEcho) {
+                        val isExplicitSeek = lastUpdatedAt != prevRemoteUpdatedAt && lastUpdatedAt > 0L
                         val drift = abs(ytCurrentTimeMs - targetPosition)
-                        if (drift > 1500L && !isUserSeeking) {
-                            youtubePlayer?.seekTo(targetPosition / 1000f)
-                            ytCurrentTimeMs = targetPosition
+                        if ((isExplicitSeek && drift > 2000L) || drift > 6500L) {
+                            if (!isUserSeeking) {
+                                youtubePlayer?.seekTo(targetPosition / 1000f)
+                                ytCurrentTimeMs = targetPosition
+                            }
                         }
-                        if (isPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
+                        if (isPlaying) {
+                            if (!isPlayingState) youtubePlayer?.play()
+                        } else {
+                            if (isPlayingState) youtubePlayer?.pause()
+                        }
                     }
+                    prevRemoteUpdatedAt = lastUpdatedAt
                 } else if (videoUrl.isNotEmpty()) {
                     isYouTubeMode = false
                     val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
@@ -913,144 +997,281 @@ fun YouTubeWatchScreen(
                 }
         ) {
             if (isYouTubeMode) {
-                AndroidView(
-                    factory = { ctx ->
-                        YouTubePlayerView(ctx).apply {
-                            enableAutomaticInitialization = false
-                            lifecycleOwner.lifecycle.addObserver(this)
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val containerAspect = maxWidth / maxHeight
+                    val targetAspect = 16f / 9f
+                    // Keeps EXACT video size and ratio as YouTube's default landscape player.
+                    // On wide landscape phones, fills height and centers 16:9 video with black pillarbox bars.
+                    // On portrait or tablets, fits width preserving 16:9 with letterbox bars.
+                    val videoModifier = if (containerAspect > targetAspect) {
+                        Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(targetAspect, matchHeightConstraintsFirst = true)
+                    } else {
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(targetAspect, matchHeightConstraintsFirst = false)
+                    }
 
-                            fun configureInternalWebView(view: android.view.View) {
-                                if (view is android.webkit.WebView) {
-                                    view.settings.mediaPlaybackRequiresUserGesture = false
-                                    view.settings.javaScriptEnabled = true
-                                    view.settings.domStorageEnabled = true
-                                    view.settings.databaseEnabled = true
-                                    view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                                }
-                                if (view is android.view.ViewGroup) {
-                                    for (i in 0 until view.childCount) {
-                                        configureInternalWebView(view.getChildAt(i))
-                                    }
-                                }
-                            }
-                            configureInternalWebView(this)
-                            setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
-                                override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) {
-                                    child?.let { configureInternalWebView(it) }
-                                }
-                                override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
-                            })
+                    Box(
+                        modifier = videoModifier,
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                YouTubePlayerView(ctx).apply {
+                                    enableAutomaticInitialization = false
+                                    lifecycleOwner.lifecycle.addObserver(this)
 
-                            val iFrameOptions = IFramePlayerOptions.Builder(ctx)
-                                 .controls(0)
-                                 .autoplay(1)
-                                 .rel(0)
-                                 .ivLoadPolicy(3)
-                                 .ccLoadPolicy(0)
-                                 .build()
+                                    fun configureInternalWebView(view: android.view.View) {
+                                        if (view is android.webkit.WebView) {
+                                            internalWebView = view
+                                            view.settings.mediaPlaybackRequiresUserGesture = false
+                                            view.settings.javaScriptEnabled = true
+                                            view.settings.domStorageEnabled = true
+                                            view.settings.databaseEnabled = true
+                                            view.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+                                            view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                            view.isLongClickable = false
+                                            view.setOnLongClickListener { true }
 
-                            initialize(
-                                youTubePlayerListener = object : AbstractYouTubePlayerListener() {
-                                    override fun onReady(youTubePlayer: YouTubePlayer) {
-                                        youtubePlayer = youTubePlayer
-                                        youTubePlayer.unMute()
-                                        youTubePlayer.setVolume(100)
-                                        post { configureInternalWebView(this@apply) }
-                                        if (currentYtId.isNotEmpty()) {
-                                            val shouldPlay = isPlayingState || roomIsPlaying
-                                            val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
-                                            val startSec = (expected / 1000f).coerceAtLeast(0f)
-                                            if (shouldPlay) {
-                                                youTubePlayer.loadVideo(currentYtId, startSec)
-                                            } else {
-                                                youTubePlayer.cueVideo(currentYtId, startSec)
+                                            val disable2xAndClutterScript = """
+                                                (function() {
+                                                    window.addEventListener('contextmenu', function(e) { e.preventDefault(); }, true);
+                                                    
+                                                    var styleId = 'yt-custom-clean-style';
+                                                    if (!document.getElementById(styleId)) {
+                                                        var style = document.createElement('style');
+                                                        style.id = styleId;
+                                                        style.innerHTML = `
+                                                            .ytp-chrome-top,
+                                                            .ytp-chrome-bottom,
+                                                            .ytp-pause-overlay,
+                                                            .ytp-pause-overlay-container,
+                                                            .ytp-endscreen-content,
+                                                            .ytp-endscreen-paginate,
+                                                            .ytp-ce-element,
+                                                            .ytp-ce-covering-overlay,
+                                                            .ytp-ce-expanding-overlay,
+                                                            .ytp-watermark,
+                                                            .ytp-gradient-top,
+                                                            .ytp-gradient-bottom,
+                                                            .ytp-title-channel,
+                                                            .ytp-share-button,
+                                                            .ytp-watch-later-button,
+                                                            .ytp-suggestion-set,
+                                                            .ytp-contextmenu,
+                                                            .ytp-related-on-error-overlay,
+                                                            .ytp-show-cards-title,
+                                                            .ytp-cards-teaser,
+                                                            .ytp-bezel,
+                                                            .ytp-bezel-text,
+                                                            a[href*="youtube.com"],
+                                                            .ytp-button[aria-label*="Like"],
+                                                            .ytp-button[aria-label*="Dislike"],
+                                                            .ytp-button[aria-label*="Share"],
+                                                            .ytp-share-panel {
+                                                                display: none !important;
+                                                                visibility: hidden !important;
+                                                                opacity: 0 !important;
+                                                                pointer-events: none !important;
+                                                                width: 0 !important;
+                                                                height: 0 !important;
+                                                            }
+                                                            html, body, #player, .html5-video-player, .html5-video-container {
+                                                                width: 100% !important;
+                                                                height: 100% !important;
+                                                                background: #000000 !important;
+                                                                overflow: hidden !important;
+                                                            }
+                                                            video {
+                                                                object-fit: contain !important;
+                                                            }
+                                                        `;
+                                                        (document.head || document.documentElement).appendChild(style);
+                                                    }
+
+                                                    function cleanAndLockRate() {
+                                                        var removeSelectors = [
+                                                            '.ytp-chrome-top', '.ytp-chrome-bottom', '.ytp-pause-overlay',
+                                                            '.ytp-endscreen-content', '.ytp-ce-element', '.ytp-watermark',
+                                                            '.ytp-gradient-top', '.ytp-gradient-bottom', '.ytp-share-button',
+                                                            '.ytp-watch-later-button', '.ytp-suggestion-set', '.ytp-contextmenu',
+                                                            '.ytp-show-cards-title'
+                                                        ];
+                                                        for (var s = 0; s < removeSelectors.length; s++) {
+                                                            var els = document.querySelectorAll(removeSelectors[s]);
+                                                            for (var j = 0; j < els.length; j++) {
+                                                                els[j].style.setProperty('display', 'none', 'important');
+                                                                els[j].style.setProperty('visibility', 'hidden', 'important');
+                                                            }
+                                                        }
+
+                                                        var vids = document.getElementsByTagName('video');
+                                                        for (var i = 0; i < vids.length; i++) {
+                                                            var v = vids[i];
+                                                            if (!v.__rateLocked) {
+                                                                v.__rateLocked = true;
+                                                                v.addEventListener('ratechange', function(e) {
+                                                                    if (this.playbackRate > 1.05 || this.playbackRate < 0.95) {
+                                                                        this.playbackRate = 1.0;
+                                                                    }
+                                                                }, true);
+                                                            }
+                                                            if (v.playbackRate > 1.05 || v.playbackRate < 0.95) {
+                                                                v.playbackRate = 1.0;
+                                                            }
+                                                        }
+                                                        if (typeof player !== 'undefined' && player && typeof player.getPlaybackRate === 'function') {
+                                                            if (player.getPlaybackRate() !== 1) {
+                                                                player.setPlaybackRate(1);
+                                                            }
+                                                        }
+                                                    }
+                                                    setInterval(cleanAndLockRate, 250);
+                                                    cleanAndLockRate();
+                                                })();
+                                            """.trimIndent()
+                                            view.evaluateJavascript(disable2xAndClutterScript, null)
+                                        }
+                                        if (view is android.view.ViewGroup) {
+                                            for (i in 0 until view.childCount) {
+                                                configureInternalWebView(view.getChildAt(i))
                                             }
-                                            lastLoadedYtId = currentYtId
                                         }
                                     }
-
-                                    override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
-                                        android.util.Log.e("YouTubeWatchScreen", "YouTube player error: $error")
-                                        if ((error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER ||
-                                             error == PlayerConstants.PlayerError.REQUEST_MISSING_HTTP_REFERER) && currentYtId.isNotEmpty()) {
-                                            youTubePlayer.cueVideo(currentYtId, 0f)
+                                    configureInternalWebView(this)
+                                    setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
+                                        override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) {
+                                            child?.let { configureInternalWebView(it) }
                                         }
-                                    }
+                                        override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
+                                    })
 
-                                 override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
-                                    when (state) {
-                                        PlayerConstants.PlayerState.PLAYING -> {
-                                            isPlayingState = true
-                                            isYtBuffering = false
-                                        }
-                                        PlayerConstants.PlayerState.PAUSED -> {
-                                            isYtBuffering = false
-                                            if (roomIsPlaying && !isUserSeeking) {
-                                                // YouTube paused internally during seek or buffer while room is playing!
-                                                // Resume playback immediately so connected friends don't get paused.
-                                                youTubePlayer.play()
-                                                isPlayingState = true
-                                            } else {
-                                                isPlayingState = false
+                                    val iFrameOptions = IFramePlayerOptions.Builder(ctx)
+                                         .controls(0)
+                                         .autoplay(1)
+                                         .rel(0)
+                                         .ivLoadPolicy(3)
+                                         .ccLoadPolicy(0)
+                                         .build()
+
+                                    initialize(
+                                        youTubePlayerListener = object : AbstractYouTubePlayerListener() {
+                                            override fun onReady(youTubePlayer: YouTubePlayer) {
+                                                youtubePlayer = youTubePlayer
+                                                youTubePlayer.unMute()
+                                                youTubePlayer.setVolume(100)
+                                                post {
+                                                    configureInternalWebView(this@apply)
+                                                    internalWebView?.evaluateJavascript(
+                                                        "(function() { try { return (player && player.getVideoData) ? player.getVideoData().title : ''; } catch(e) { return ''; } })()"
+                                                    ) { res ->
+                                                        val cleaned = res?.trim('"', ' ') ?: ""
+                                                        if (cleaned.isNotEmpty() && cleaned != "null" && cleaned != "undefined") {
+                                                            videoTitle = cleaned
+                                                        }
+                                                    }
+                                                }
+                                                if (currentYtId.isNotEmpty()) {
+                                                    val shouldPlay = isPlayingState || roomIsPlaying
+                                                    val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
+                                                    val startSec = (expected / 1000f).coerceAtLeast(0f)
+                                                    if (shouldPlay) {
+                                                        youTubePlayer.loadVideo(currentYtId, startSec)
+                                                    } else {
+                                                        youTubePlayer.cueVideo(currentYtId, startSec)
+                                                    }
+                                                    lastLoadedYtId = currentYtId
+                                                }
+                                            }
+
+                                            override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
+                                                android.util.Log.e("YouTubeWatchScreen", "YouTube player error: $error")
+                                                if ((error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER ||
+                                                     error == PlayerConstants.PlayerError.REQUEST_MISSING_HTTP_REFERER) && currentYtId.isNotEmpty()) {
+                                                    youTubePlayer.cueVideo(currentYtId, 0f)
+                                                }
+                                            }
+
+                                         override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
+                                            when (state) {
+                                                PlayerConstants.PlayerState.PLAYING -> {
+                                                    isPlayingState = true
+                                                    isYtBuffering = false
+                                                }
+                                                PlayerConstants.PlayerState.PAUSED -> {
+                                                    isYtBuffering = false
+                                                    isPlayingState = false
+                                                }
+                                                PlayerConstants.PlayerState.BUFFERING -> {
+                                                    isYtBuffering = true
+                                                }
+                                                PlayerConstants.PlayerState.ENDED -> {
+                                                    isPlayingState = false
+                                                    roomIsPlaying = false
+                                                    isYtBuffering = false
+                                                    if (canControl) {
+                                                        pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
+                                                    }
+                                                }
+                                                else -> {}
                                             }
                                         }
-                                        PlayerConstants.PlayerState.BUFFERING -> {
-                                            isYtBuffering = true
-                                            if (roomIsPlaying) {
-                                                isPlayingState = true
+
+                                        override fun onCurrentSecond(youTubePlayer: YouTubePlayer, second: Float) {
+                                            ytCurrentTimeMs = (second * 1000).toLong()
+                                        }
+
+                                        override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
+                                            ytDurationMs = (duration * 1000).toLong()
+                                        }
+
+                                        override fun onPlaybackQualityChange(
+                                            youTubePlayer: YouTubePlayer,
+                                            playbackQuality: PlayerConstants.PlaybackQuality
+                                        ) {
+                                            val raw = playbackQuality.name.lowercase()
+                                            currentQualityLabel = when {
+                                                raw.contains("1080") -> "1080p"
+                                                raw.contains("720") -> "720p"
+                                                raw.contains("highres") || raw.contains("high_res") -> "1440p+"
+                                                raw.contains("large") -> "480p"
+                                                raw.contains("medium") -> "360p"
+                                                raw.contains("small") -> "240p"
+                                                raw.contains("tiny") -> "144p"
+                                                else -> null
                                             }
                                         }
-                                        PlayerConstants.PlayerState.ENDED -> {
-                                            isPlayingState = false
-                                            roomIsPlaying = false
-                                            isYtBuffering = false
-                                            if (canControl) {
-                                                pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
+
+                                        override fun onPlaybackRateChange(
+                                            youTubePlayer: YouTubePlayer,
+                                            playbackRate: PlayerConstants.PlaybackRate
+                                        ) {
+                                            // Prevent 2x playback speed: force back to 1x normal speed immediately
+                                            if (playbackRate != PlayerConstants.PlaybackRate.RATE_1) {
+                                                youTubePlayer.setPlaybackRate(PlayerConstants.PlaybackRate.RATE_1)
                                             }
                                         }
-                                        else -> {}
-                                    }
-                                }
-
-                                override fun onCurrentSecond(youTubePlayer: YouTubePlayer, second: Float) {
-                                    ytCurrentTimeMs = (second * 1000).toLong()
-                                }
-
-                                override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
-                                    ytDurationMs = (duration * 1000).toLong()
-                                }
-
-                                override fun onPlaybackQualityChange(
-                                    youTubePlayer: YouTubePlayer,
-                                    playbackQuality: PlayerConstants.PlaybackQuality
-                                ) {
-                                    // Matched by name rather than by enum constant so this can't
-                                    // fail to compile if this library version spells a constant
-                                    // slightly differently (e.g. HIGH_RES vs HIGHRES).
-                                    val raw = playbackQuality.name.lowercase()
-                                    currentQualityLabel = when {
-                                        raw.contains("1080") -> "1080p"
-                                        raw.contains("720") -> "720p"
-                                        raw.contains("highres") || raw.contains("high_res") -> "1440p+"
-                                        raw.contains("large") -> "480p"
-                                        raw.contains("medium") -> "360p"
-                                        raw.contains("small") -> "240p"
-                                        raw.contains("tiny") -> "144p"
-                                        else -> null
-                                    }
+                                    },
+                                    handleNetworkEvents = false,
+                                    playerOptions = iFrameOptions
+                                )
                                 }
                             },
-                            handleNetworkEvents = false,
-                            playerOptions = iFrameOptions
+                            onRelease = { playerView ->
+                                lifecycleOwner.lifecycle.removeObserver(playerView)
+                                playerView.release()
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
-                        }
-                    },
-                    onRelease = { playerView ->
-                        lifecycleOwner.lifecycle.removeObserver(playerView)
-                        playerView.release()
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                    }
+                }
             } else {
                 AndroidView(
                     factory = { ctx ->
@@ -1066,23 +1287,33 @@ fun YouTubeWatchScreen(
                 )
             }
 
-            // Read-only quality badge. YouTube's IFrame API removed the ability for apps
-            // to force a resolution back in 2019-2021 — this only shows what YouTube itself
-            // chose based on screen size/bandwidth, it isn't a selector.
-            if (isYouTubeMode && currentQualityLabel != null) {
+            // Quality badge & settings button on video. Click to open Quality Control Menu!
+            if (isYouTubeMode) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 12.dp, end = 12.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                        .clickable { isSettingsOpen = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    Text(
-                        text = currentQualityLabel ?: "",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Quality Settings",
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = currentQualityLabel ?: "Auto",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
 
@@ -1257,27 +1488,21 @@ fun YouTubeWatchScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 YtPlayerControlsOverlay(
-                    isHost = uid == hostUid,
-                    canControl = canControl,
-                    controlsUnlocked = controlsUnlocked,
+                    videoTitle = videoTitle,
+                    currentQuality = currentQualityLabel ?: "Auto",
                     isPlaying = isPlayingState,
-                    currentMs = if (isYouTubeMode) ytCurrentTimeMs else exoCurrentPositionMs,
-                    durationMs = if (isYouTubeMode) ytDurationMs else exoDurationMs,
-                    participants = participants,
-                    myUid = uid,
+                    isBuffering = isYtBuffering,
+                    currentMs = ytCurrentTimeMs,
+                    durationMs = ytDurationMs,
+                    canControl = canControl,
                     onBack = onNavigateBack,
                     onTogglePlay = {
                         if (!canControl) return@YtPlayerControlsOverlay
                         val newPlaying = !isPlayingState
                         isPlayingState = newPlaying
                         roomIsPlaying = newPlaying
-                        if (isYouTubeMode) {
-                            if (newPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
-                            pushPlaybackUpdate(newPlaying, ytCurrentTimeMs)
-                        } else {
-                            exoPlayer.playWhenReady = newPlaying
-                            pushPlaybackUpdate(newPlaying, exoPlayer.currentPosition)
-                        }
+                        if (newPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
+                        pushPlaybackUpdate(newPlaying, ytCurrentTimeMs)
                         bumpInteraction()
                     },
                     onSkipBack = { skip(-10000L) },
@@ -1285,41 +1510,19 @@ fun YouTubeWatchScreen(
                     onSeek = { targetMs ->
                         if (!canControl) return@YtPlayerControlsOverlay
                         val willPlay = isPlayingState || roomIsPlaying
-                        if (isYouTubeMode) {
-                            youtubePlayer?.seekTo(targetMs / 1000f)
-                            ytCurrentTimeMs = targetMs
-                            if (willPlay) youtubePlayer?.play()
-                        } else {
-                            exoPlayer.seekTo(targetMs)
-                            if (willPlay) exoPlayer.playWhenReady = true
-                        }
+                        youtubePlayer?.seekTo(targetMs / 1000f)
+                        ytCurrentTimeMs = targetMs
+                        if (willPlay) youtubePlayer?.play()
                         pushPlaybackUpdate(willPlay, targetMs)
                         bumpInteraction()
                     },
                     isLandscape = isLandscape,
                     onToggleLandscape = { toggleLandscape() },
-                    onOpenChat = { openChat() },
-                    onToggleEmojiPicker = { isEmojiPickerOpen = !isEmojiPickerOpen; bumpInteraction() },
-                    onToggleUnlock = {
-                        db.child("controlsUnlocked").setValue(!controlsUnlocked)
+                    onOpenSettings = {
+                        isSettingsOpen = true
                         bumpInteraction()
                     },
                     onSeekingStateChanged = { isUserSeeking = it }
-                )
-            }
-
-            AnimatedVisibility(
-                visible = isEmojiPickerOpen && !isChatMode,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 72.dp)
-            ) {
-                YtEmojiPickerRow(
-                    onPick = { emoji ->
-                        sendReaction(emoji)
-                        isEmojiPickerOpen = false
-                    },
-                    onClose = { isEmojiPickerOpen = false }
                 )
             }
         }
@@ -1358,6 +1561,16 @@ fun YouTubeWatchScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f).imePadding()
             )
         }
+    }
+
+    if (isSettingsOpen) {
+        VideoQualitySettingsDialog(
+            currentQuality = currentQualityLabel ?: "Auto",
+            onSelectQuality = { qualityKey ->
+                applyYouTubeQuality(qualityKey)
+            },
+            onDismiss = { isSettingsOpen = false }
+        )
     }
 }
 
@@ -1548,14 +1761,13 @@ private fun YtParticipantAvatarsRow(participants: List<YtParticipantInfo>, exclu
 
 @Composable
 private fun YtPlayerControlsOverlay(
-    isHost: Boolean,
-    canControl: Boolean,
-    controlsUnlocked: Boolean,
+    videoTitle: String,
+    currentQuality: String,
     isPlaying: Boolean,
+    isBuffering: Boolean,
     currentMs: Long,
     durationMs: Long,
-    participants: List<YtParticipantInfo>,
-    myUid: String,
+    canControl: Boolean,
     onBack: () -> Unit,
     onTogglePlay: () -> Unit,
     onSkipBack: () -> Unit,
@@ -1563,114 +1775,193 @@ private fun YtPlayerControlsOverlay(
     onSeek: (Long) -> Unit,
     isLandscape: Boolean,
     onToggleLandscape: () -> Unit,
-    onOpenChat: () -> Unit,
-    onToggleEmojiPicker: () -> Unit,
-    onToggleUnlock: () -> Unit,
+    onOpenSettings: () -> Unit,
     onSeekingStateChanged: (Boolean) -> Unit = {}
 ) {
-    // Local drag state so the slider follows the finger smoothly instead of
-    // jumping back to the synced position on every Firebase update mid-drag.
     var dragValue by remember { mutableStateOf<Float?>(null) }
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(Color.Black.copy(alpha = 0.45f))
     ) {
-        // Top bar
+        // Top bar: Back + Video Title + Resolution/Quality Settings button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
-                .padding(8.dp),
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
-            }
-            Spacer(modifier = Modifier.weight(1f))
-            YtParticipantAvatarsRow(participants = participants, excludeUid = myUid)
-            Spacer(modifier = Modifier.width(8.dp))
-            if (isHost) {
-                Text(
-                    text = if (controlsUnlocked) "Unlocked" else "Locked",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-                Switch(checked = controlsUnlocked, onCheckedChange = { onToggleUnlock() })
-            } else if (!canControl) {
-                Text("Host controls playback", color = Color.White, style = MaterialTheme.typography.labelSmall)
-            }
-        }
-
-        // Center play controls
-        Row(
-            modifier = Modifier.align(Alignment.Center),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(32.dp)
-        ) {
-            IconButton(onClick = onSkipBack, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.Replay10, contentDescription = "Back 10s", tint = Color.White, modifier = Modifier.size(36.dp))
-            }
-            IconButton(onClick = onTogglePlay, modifier = Modifier.size(64.dp)) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.size(44.dp)
+            ) {
                 Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(48.dp)
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color.White
                 )
             }
-            IconButton(onClick = onSkipForward, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White, modifier = Modifier.size(36.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = videoTitle.ifEmpty { "YouTube Video" },
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            // Resolution changing setting button
+            Surface(
+                onClick = onOpenSettings,
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White.copy(alpha = 0.18f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Change Resolution",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = currentQuality.ifEmpty { "Auto" },
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
-        // Bottom bar: progress + action buttons
+        // Center play controls: 10s Backward, Play/Pause (or Buffering spinner), 10s Forward
+        if (isBuffering) {
+            CircularProgressIndicator(
+                color = Color.White,
+                modifier = Modifier
+                    .size(52.dp)
+                    .align(Alignment.Center),
+                strokeWidth = 3.dp
+            )
+        } else {
+            Row(
+                modifier = Modifier.align(Alignment.Center),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(36.dp)
+            ) {
+                // 10-second backward button
+                IconButton(
+                    onClick = onSkipBack,
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Replay10,
+                        contentDescription = "10s Backward",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                // Play / Pause button
+                IconButton(
+                    onClick = onTogglePlay,
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(52.dp)
+                    )
+                }
+
+                // 10-second forward button
+                IconButton(
+                    onClick = onSkipForward,
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Forward10,
+                        contentDescription = "10s Forward",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+
+        // Bottom bar: Horizontal Seek Bar + Timeline + Landscape toggle
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .navigationBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 6.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(YtFormatMillis((dragValue ?: currentMs.toFloat()).toLong()), color = Color.White, style = MaterialTheme.typography.labelSmall)
-                val validDuration = durationMs > 0
-                val maxMs = if (validDuration) durationMs.toFloat() else 1000f
-                Slider(
-                    value = (dragValue ?: currentMs.toFloat()).coerceIn(0f, maxMs),
-                    onValueChange = { 
-                        if (canControl && validDuration) {
-                            dragValue = it
-                            onSeekingStateChanged(true)
-                        }
-                    },
-                    onValueChangeFinished = {
-                        dragValue?.let { onSeek(it.toLong()) }
-                        dragValue = null
-                        onSeekingStateChanged(false)
-                    },
-                    valueRange = 0f..maxMs,
-                    enabled = canControl && validDuration,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                )
-                Text(YtFormatMillis(if (validDuration) durationMs else 0L), color = Color.White, style = MaterialTheme.typography.labelSmall)
-            }
-            Row(
+            val validDuration = durationMs > 0
+            val maxMs = if (validDuration) durationMs.toFloat() else 1000f
+
+            // Horizontal Seek Bar
+            Slider(
+                value = (dragValue ?: currentMs.toFloat()).coerceIn(0f, maxMs),
+                onValueChange = {
+                    if (canControl && validDuration) {
+                        dragValue = it
+                        onSeekingStateChanged(true)
+                    }
+                },
+                onValueChangeFinished = {
+                    dragValue?.let { onSeek(it.toLong()) }
+                    dragValue = null
+                    onSeekingStateChanged(false)
+                },
+                valueRange = 0f..maxMs,
+                enabled = canControl && validDuration,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Red,
+                    activeTrackColor = Color.Red,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                )
+            )
+
+            // Timeline row (Current Time / Duration) + Landscape toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = onToggleEmojiPicker) {
-                    Icon(Icons.Default.EmojiEmotions, contentDescription = "Reactions", tint = Color.White)
-                }
-                IconButton(onClick = onOpenChat) {
-                    Icon(Icons.Default.Chat, contentDescription = "Chat", tint = Color.White)
-                }
-                IconButton(onClick = onToggleLandscape) {
+                // Timeline
+                val curTime = YtFormatMillis((dragValue ?: currentMs.toFloat()).toLong())
+                val totalTime = YtFormatMillis(if (validDuration) durationMs else 0L)
+                Text(
+                    text = "$curTime / $totalTime",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+
+                // Landscape toggle
+                IconButton(
+                    onClick = onToggleLandscape,
+                    modifier = Modifier.size(36.dp)
+                ) {
                     Icon(
-                        if (isLandscape) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                        contentDescription = if (isLandscape) "Exit fullscreen" else "Fullscreen",
-                        tint = Color.White
+                        imageVector = if (isLandscape) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        contentDescription = if (isLandscape) "Exit landscape" else "Landscape",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -2425,4 +2716,122 @@ private fun YtFormatMillis(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+@Composable
+private fun VideoQualitySettingsDialog(
+    currentQuality: String,
+    onSelectQuality: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val qualityOptions = listOf(
+        "Auto" to "Auto (Recommended)",
+        "1080p" to "1080p (Full HD)",
+        "720p" to "720p (HD)",
+        "480p" to "480p (SD)",
+        "360p" to "360p (Data Saver)",
+        "240p" to "240p (Low)"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1E1E1E),
+        titleContentColor = Color.White,
+        textContentColor = Color.LightGray,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Player Settings",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Resolution & Video Quality:",
+                    fontSize = 13.sp,
+                    color = Color.LightGray,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                qualityOptions.forEach { (key, label) ->
+                    val isSelected = currentQuality.equals(key, ignoreCase = true) ||
+                        (key == "Auto" && (currentQuality.isEmpty() || currentQuality.equals("auto", ignoreCase = true)))
+
+                    Surface(
+                        onClick = {
+                            onSelectQuality(key)
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f),
+                        border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 14.sp
+                            )
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Surface(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "⚡ 2x speed player disabled for smooth sync playback",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    )
 }
