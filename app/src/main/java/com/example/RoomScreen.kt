@@ -1,17 +1,33 @@
 package com.example
 
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import android.net.Uri
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -20,32 +36,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
-import com.google.firebase.database.ValueEventListener
 import com.google.firebase.database.FirebaseDatabase
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.ui.Alignment
-import kotlin.math.abs
+import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants
-import androidx.compose.foundation.shape.RoundedCornerShape
 
 fun getYoutubeVideoId(url: String): String? {
     val clean = url.trim()
@@ -84,6 +81,69 @@ fun RoomScreen(
 
     var ytInputUrl by remember { mutableStateOf("") }
     var webInputUrl by remember { mutableStateOf("") }
+
+    val currentUser = auth.currentUser
+    val userEmail = currentUser?.email?.lowercase()?.trim() ?: ""
+    var isPremiumUser by remember { mutableStateOf(PremiumManager.isHardcodedAdmin(userEmail)) }
+    var showPremiumDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uid, userEmail) {
+        if (PremiumManager.isHardcodedAdmin(userEmail)) {
+            isPremiumUser = true
+            return@LaunchedEffect
+        }
+        if (uid.isEmpty()) return@LaunchedEffect
+
+        val rootRef = FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference
+
+        // 1. Check user profile: users/{uid}/isPremium
+        rootRef.child("users").child(uid).child("isPremium").addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val isPrem = snapshot.getValue(Boolean::class.java) == true || snapshot.getValue(Long::class.java) == 1L
+                if (isPrem) isPremiumUser = true
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+
+        // 2. Comprehensive check on the entire whitelist node (handles keys, values, and Name: uid formats)
+        rootRef.child("whitelist").addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (!snapshot.exists()) return
+
+                val emailKey = if (userEmail.isNotEmpty()) PremiumManager.sanitizeEmail(userEmail) else ""
+
+                // Direct key check
+                if (snapshot.hasChild(uid) || (emailKey.isNotEmpty() && snapshot.hasChild(emailKey))) {
+                    isPremiumUser = true
+                    return
+                }
+
+                // Check all children: matches if uid/email is a key OR if it was entered as a value (e.g. Name: "ReO4...")
+                for (child in snapshot.children) {
+                    val childKey = child.key ?: ""
+                    val childVal = child.value?.toString()?.trim() ?: ""
+
+                    // Matches if child key is the UID or Email
+                    if (childKey.equals(uid, ignoreCase = true) ||
+                        (emailKey.isNotEmpty() && childKey.equals(emailKey, ignoreCase = true)) ||
+                        (userEmail.isNotEmpty() && childKey.equals(userEmail, ignoreCase = true))
+                    ) {
+                        isPremiumUser = true
+                        return
+                    }
+
+                    // Matches if child value is the UID or Email (e.g. Name = "ReO4O5io7cRMVxG5S5WnWSk8sqm2")
+                    if (childVal.equals(uid, ignoreCase = true) ||
+                        (userEmail.isNotEmpty() && childVal.equals(userEmail, ignoreCase = true))
+                    ) {
+                        isPremiumUser = true
+                        return
+                    }
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
 
     var myUsername by remember { mutableStateOf(UserProfileStorage.getCachedUsername(context, uid).ifEmpty { "Someone" }) }
     var hostUid by remember { mutableStateOf("") }
@@ -255,30 +315,15 @@ fun RoomScreen(
                             hasVideo = true
                             onNavigateToWatch(isYt)
                         }
+                    },
+                    onSearchMovies = {
+                        if (isPremiumUser) {
+                            onNavigateToNetMirror()
+                        } else {
+                            showPremiumDialog = true
+                        }
                     }
                 )
-
-                // ========== NETMIRROR BUTTON ==========
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Button(
-                    onClick = onNavigateToNetMirror,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF00C853)
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .height(52.dp)
-                ) {
-                    Text(
-                        text = "Browse NetMirror",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = Color.White
-                    )
-                }
 
                 if (hasVideo) {
                     Spacer(modifier = Modifier.height(10.dp))
@@ -295,6 +340,14 @@ fun RoomScreen(
             }
         }
     }
+
+    if (showPremiumDialog) {
+        UraniumPremiumDialog(
+            userUid = uid,
+            userEmail = userEmail,
+            onDismiss = { showPremiumDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -308,6 +361,7 @@ private fun ReactorRoomHero(
     onInviteFriends: () -> Unit,
     onPlayYt: () -> Unit,
     onPlayWeb: () -> Unit,
+    onSearchMovies: () -> Unit,
 ) {
     BoxWithConstraints(
         modifier = Modifier
@@ -362,18 +416,55 @@ private fun ReactorRoomHero(
                 .clickable(onClick = onNavigateBack)
         )
 
-        // Room code
-        Text(
-            text = "Room: $roomCode",
-            color = Color.White,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 18.sp,
+        // Room code: clearly visible on top-left right after the back button, single line, glowing cyan code with tap-to-copy
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .offset(x = w * 0.1258f, y = h * 0.0186f)
-                .size(w * 0.2814f, h * 0.0345f)
-                .wrapContentHeight(Alignment.CenterVertically)
+                .offset(x = w * 0.128f, y = h * 0.0106f)
+                .height(h * 0.0478f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Room Code", roomCode))
+                    Toast.makeText(context, "Room code $roomCode copied!", Toast.LENGTH_SHORT).show()
+                }
+                .padding(horizontal = 4.dp)
+        ) {
+            Text(
+                text = "Room: ",
+                color = Color.White.copy(alpha = 0.90f),
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = roomCode,
+                color = Color(0xFF00E5FF),
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+                letterSpacing = 1.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Icon(
+                imageVector = Icons.Default.ContentCopy,
+                contentDescription = "Copy room code",
+                tint = Color(0xFF00E5FF).copy(alpha = 0.85f),
+                modifier = Modifier.size(15.dp)
+            )
+        }
+
+        // Search Movies and Web Series bar with premium aesthetic aura & liquid laser animation
+        ReactorSearchBarAestheticAura(
+            modifier = Modifier
+                .offset(x = w * 0.0240f, y = h * 0.0640f)
+                .size(w * 0.9521f, h * 0.0650f),
+            onClick = onSearchMovies
         )
 
+        // Invite Friends button
         Box(
             modifier = Modifier
                 .offset(x = w * 0.0240f, y = h * 0.1328f)
@@ -498,5 +589,166 @@ private fun ReactorRoomHero(
                 .size(w * 0.2635f, h * 0.0558f)
                 .clickable(onClick = onPlayWeb)
         )
+    }
+}
+
+/**
+ * Ultra-premium aesthetic animation for the "Search Movies and Web Series" bar.
+ * Layers:
+ * 1. Pulsing cyber-plasma ambient glow (neon crimson / ruby aura).
+ * 2. Continuous rotating laser beam sweeping around the rounded pill border.
+ * 3. Prismatic glass shimmer flare gliding across the capsule surface.
+ * 4. Nuclear hazard node energy pulses at both ends.
+ */
+@Composable
+private fun ReactorSearchBarAestheticAura(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "searchBarAura")
+
+    // 1. Ambient plasma breathing pulse
+    val auraPulse by infiniteTransition.animateFloat(
+        initialValue = 0.50f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "auraPulse"
+    )
+
+    // 2. Liquid laser beam orbiting continuously around the perimeter
+    val laserSweepAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "laserSweepAngle"
+    )
+
+    // 3. Luxurious light shimmer gliding across the bar
+    val shimmerProgress by infiniteTransition.animateFloat(
+        initialValue = -0.6f,
+        targetValue = 1.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3200, delayMillis = 350, easing = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1.0f)),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerProgress"
+    )
+
+    // 4. Subtle hazard node energy breathing
+    val nodeGlow by infiniteTransition.animateFloat(
+        initialValue = 0.70f,
+        targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "nodeGlow"
+    )
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(26.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val pillRadius = CornerRadius(h / 2f, h / 2f)
+
+            // Layer 1: Ambient Plasma Outer Halo (Crimson / Neon Danger Red)
+            drawRoundRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFFF1744).copy(alpha = 0.40f * auraPulse),
+                        Color(0xFFFF0055).copy(alpha = 0.20f * auraPulse),
+                        Color.Transparent
+                    ),
+                    center = Offset(w / 2f, h / 2f),
+                    radius = w * 0.55f
+                ),
+                cornerRadius = pillRadius
+            )
+
+            // Layer 2: Rotating Liquid Laser Orbit along the perimeter
+            rotate(degrees = laserSweepAngle, pivot = Offset(w / 2f, h / 2f)) {
+                drawRoundRect(
+                    brush = Brush.sweepGradient(
+                        0.0f to Color(0xFFFF1744).copy(alpha = 0.05f),
+                        0.55f to Color(0xFFFF5252).copy(alpha = 0.25f),
+                        0.80f to Color(0xFFFF1744).copy(alpha = 0.85f),
+                        0.94f to Color(0xFFFFD700).copy(alpha = 0.95f), // Gold plasma spark
+                        1.0f to Color.White // Hot white leading beam
+                    ),
+                    style = Stroke(width = 2.5.dp.toPx()),
+                    cornerRadius = pillRadius
+                )
+            }
+
+            // Layer 3: Neon Inner Edge Accent Ring
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFFF8A80).copy(alpha = 0.45f * auraPulse),
+                        Color(0xFFFF1744).copy(alpha = 0.20f),
+                        Color(0xFFFF5252).copy(alpha = 0.45f * auraPulse)
+                    ),
+                    start = Offset(0f, 0f),
+                    end = Offset(w, h)
+                ),
+                style = Stroke(width = 1.2.dp.toPx()),
+                cornerRadius = pillRadius
+            )
+
+            // Layer 4: Glass Shimmer Reflection sweeping across the bar
+            val shimmerX = w * shimmerProgress
+            val shimmerWidth = w * 0.32f
+            drawRoundRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color.White.copy(alpha = 0.15f),
+                        Color(0xFFFFE082).copy(alpha = 0.28f),
+                        Color.White.copy(alpha = 0.15f),
+                        Color.Transparent
+                    ),
+                    start = Offset(shimmerX, 0f),
+                    end = Offset(shimmerX + shimmerWidth, h)
+                ),
+                cornerRadius = pillRadius
+            )
+
+            // Layer 5: Radioactive Hazard Icons Energy Nodes (Left and Right)
+            val nodeRadius = h * 0.36f * nodeGlow
+            // Left hazard node
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFFFD700).copy(alpha = 0.40f * auraPulse),
+                        Color(0xFFFF1744).copy(alpha = 0.15f * auraPulse),
+                        Color.Transparent
+                    )
+                ),
+                radius = nodeRadius,
+                center = Offset(h * 0.58f, h * 0.50f)
+            )
+            // Right hazard node
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFFFD700).copy(alpha = 0.40f * auraPulse),
+                        Color(0xFFFF1744).copy(alpha = 0.15f * auraPulse),
+                        Color.Transparent
+                    )
+                ),
+                radius = nodeRadius,
+                center = Offset(w - h * 0.58f, h * 0.50f)
+            )
+        }
     }
 }

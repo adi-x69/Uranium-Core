@@ -70,20 +70,61 @@ jobs:
             fi
           fi
 
-      - name: Use the fixed signing key (create a temporary one only if the repo has none)
+      - name: Ensure Uranium Keystore exists
         run: |
+          if [ ! -f uranium-release.jks ]; then
+            echo "Generating uranium-release.jks..."
+            keytool -genkeypair -v -keystore uranium-release.jks \
+              -keyalg RSA -keysize 2048 -validity 10000 -alias uranium \
+              -storepass "@di20june09" -keypass "@di20june09" \
+              -dname "CN=Uranium, OU=Dev, O=Uranium, L=City, S=State, C=IN"
+          else
+            echo "uranium-release.jks found in repository."
+          fi
+          echo "Uranium signing key fingerprint:"
+          keytool -list -v -keystore uranium-release.jks -storepass "@di20june09" | grep "SHA256" || true
+
+          # Also ensure debug.keystore is present for the initial Gradle compile
           if [ ! -f debug.keystore ]; then
-            echo "::warning::No debug.keystore in the repo. Using a TEMPORARY key - this APK cannot update over builds signed with any other key. Run the 'Create signing key (run once)' workflow first."
             keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
-          echo "Signing key fingerprint (must be identical in every run):"
-          keytool -list -v -keystore debug.keystore -storepass android | grep "SHA256" || true
 
-      - name: Build Debug APK
+      - name: Build APK
         run: gradle assembleDebug
+
+      - name: Sign APK with Uranium Keystore
+        run: |
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          echo "Using Android build-tools at $BUILD_TOOLS_DIR"
+          
+          # Sign app-debug.apk directly with uranium-release.jks
+          $BUILD_TOOLS_DIR/apksigner sign --ks uranium-release.jks \
+            --ks-key-alias uranium \
+            --ks-pass "pass:@di20june09" \
+            --key-pass "pass:@di20june09" \
+            app/build/outputs/apk/debug/app-debug.apk
+          
+          echo "Verifying signature:"
+          $BUILD_TOOLS_DIR/apksigner verify -v --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+          # Also create a copy named uranium-release.apk
+          mkdir -p app/build/outputs/apk/release
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/uranium-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: uranium-release-apk
+          path: app/build/outputs/apk/release/uranium-release.apk
+
+      - name: Upload keystore
+        uses: actions/upload-artifact@v4
+        with:
+          name: uranium-keystore
+          path: uranium-release.jks
