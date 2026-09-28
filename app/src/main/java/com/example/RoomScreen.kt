@@ -81,6 +81,7 @@ fun RoomScreen(
 
     var ytInputUrl by remember { mutableStateOf("") }
     var webInputUrl by remember { mutableStateOf("") }
+    var isSubmittingVideo by remember { mutableStateOf(false) }
 
     val currentUser = auth.currentUser
     val userEmail = currentUser?.email?.lowercase()?.trim() ?: ""
@@ -198,8 +199,27 @@ fun RoomScreen(
         val listener = object : ChildEventListener {
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
                 val pid = snapshot.key ?: return
-                if (pid == uid) return
                 val username = snapshot.child("username").getValue(String::class.java) ?: "Someone"
+                val name = snapshot.child("name").getValue(String::class.java) ?: username
+                val avatarId = snapshot.child("avatarId").getValue(String::class.java) ?: "iron_man"
+                val joinedAt = snapshot.child("joinedAt").getValue(Long::class.java) ?: System.currentTimeMillis()
+
+                if (hostUid.isNotEmpty()) {
+                    RoomHistoryManager.recordParticipantJoined(
+                        context = context,
+                        roomCode = roomCode,
+                        hostUid = hostUid,
+                        participant = RoomHistoryParticipant(
+                            uid = pid,
+                            name = name,
+                            username = username,
+                            avatarId = avatarId,
+                            joinedAt = joinedAt
+                        )
+                    )
+                }
+
+                if (pid == uid) return
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar("$username has joined the room")
                 }
@@ -280,40 +300,48 @@ fun RoomScreen(
                         val clean = ytInputUrl.trim()
                         if (clean.isNotBlank()) {
                             val ytId = getYoutubeVideoId(clean)
-                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else clean
-                            val isYt = ytId != null
-                            val updates = mapOf(
-                                "videoUrl" to finalUrl,
-                                "position" to 0L,
-                                "isPlaying" to true,
-                                "lastUpdatedBy" to uid,
-                                "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
-                            )
-                            db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
+                            if (ytId != null) {
+                                isSubmittingVideo = true
+                                val finalUrl = "https://www.youtube.com/watch?v=$ytId"
+                                val updates = mapOf(
+                                    "videoUrl" to finalUrl,
+                                    "position" to 0L,
+                                    "isPlaying" to true,
+                                    "lastUpdatedBy" to uid,
+                                    "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                                )
+                                db.updateChildren(updates).addOnCompleteListener {
+                                    isSubmittingVideo = false
+                                }
+                                recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = true, isNewVideo = true)
+                                RoomHistoryManager.recordVideoUpdated(context, roomCode, hostUid.ifEmpty { uid }, finalUrl, true)
 
-                            hasVideo = true
-                            onNavigateToWatch(isYt)
+                                hasVideo = true
+                                onNavigateToWatch(true)
+                            } else {
+                                Toast.makeText(context, "Please enter a valid YouTube link", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     onPlayWeb = {
                         val clean = webInputUrl.trim()
                         if (clean.isNotBlank()) {
-                            val ytId = getYoutubeVideoId(clean)
-                            val finalUrl = if (ytId != null) "https://www.youtube.com/watch?v=$ytId" else clean
-                            val isYt = ytId != null
+                            isSubmittingVideo = true
                             val updates = mapOf(
-                                "videoUrl" to finalUrl,
+                                "videoUrl" to clean,
                                 "position" to 0L,
                                 "isPlaying" to true,
                                 "lastUpdatedBy" to uid,
                                 "lastUpdatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
                             )
-                            db.updateChildren(updates)
-                            recordContinueWatching(usersRef, uid, roomCode, finalUrl, 0L, isYouTube = isYt, isNewVideo = true)
+                            db.updateChildren(updates).addOnCompleteListener {
+                                isSubmittingVideo = false
+                            }
+                            recordContinueWatching(usersRef, uid, roomCode, clean, 0L, isYouTube = false, isNewVideo = true)
+                            RoomHistoryManager.recordVideoUpdated(context, roomCode, hostUid.ifEmpty { uid }, clean, true)
 
                             hasVideo = true
-                            onNavigateToWatch(isYt)
+                            onNavigateToWatch(false)
                         }
                     },
                     onSearchMovies = {
@@ -338,6 +366,12 @@ fun RoomScreen(
                     Spacer(modifier = Modifier.height(20.dp))
                 }
             }
+
+            // Global Tap Blocker Overlay with Rotating Nuclear Radiation Buffering Animation
+            GlobalNetworkBufferingOverlay(
+                isLoading = isSubmittingVideo,
+                message = "INITIALIZING STREAM PROTOCOL..."
+            )
         }
     }
 

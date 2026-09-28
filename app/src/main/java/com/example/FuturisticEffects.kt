@@ -1,6 +1,10 @@
 package com.example
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -288,10 +292,10 @@ fun FuturisticHazardButton(
     ) {
         if (isLoading) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
+                NuclearRadiationBufferingIndicator(
+                    size = 20.dp,
                     color = Color.White,
-                    strokeWidth = 2.5.dp
+                    glowColor = NeonHazardAmber
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
@@ -504,3 +508,424 @@ fun FuturisticTextField(
         }
     }
 }
+
+/**
+ * Rotating nuclear radiation hazard trefoil buffering indicator.
+ * Displays 3 radioactive blades, center core, outer dashed ring, and radial plasma glow.
+ */
+@Composable
+fun NuclearRadiationBufferingIndicator(
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    color: Color = NeonCyberCyan,
+    glowColor: Color = NeonToxicGreen
+) {
+    val transition = rememberInfiniteTransition(label = "nuclearBuffering")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart),
+        label = "nuclearRotation"
+    )
+    val pulse by transition.animateFloat(
+        initialValue = 0.88f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "nuclearPulse"
+    )
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .graphicsLayer {
+                scaleX = pulse
+                scaleY = pulse
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = this.size.width
+            val h = this.size.height
+            val center = Offset(w / 2f, h / 2f)
+            val outerRadius = (minOf(w, h) / 2f) * 0.95f
+            val innerHoleRadius = outerRadius * 0.35f
+            val coreDotRadius = outerRadius * 0.18f
+
+            // Outer subtle hazard halo
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(glowColor.copy(alpha = 0.35f), Color.Transparent),
+                    center = center,
+                    radius = outerRadius * 1.25f
+                ),
+                radius = outerRadius * 1.15f,
+                center = center
+            )
+
+            // Outer dashed hazard guide ring
+            rotate(rotation * -0.5f, center) {
+                drawCircle(
+                    color = color.copy(alpha = 0.35f),
+                    radius = outerRadius,
+                    center = center,
+                    style = Stroke(
+                        width = 1.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                    )
+                )
+            }
+
+            // Rotating 3 Nuclear Hazard Blades (Trefoil)
+            rotate(rotation, center) {
+                for (i in 0..2) {
+                    val startAngle = (i * 120f) - 30f
+                    drawArc(
+                        brush = Brush.radialGradient(
+                            colors = listOf(glowColor, color),
+                            center = center,
+                            radius = outerRadius
+                        ),
+                        startAngle = startAngle,
+                        sweepAngle = 60f,
+                        useCenter = true,
+                        topLeft = Offset(center.x - outerRadius * 0.88f, center.y - outerRadius * 0.88f),
+                        size = androidx.compose.ui.geometry.Size(outerRadius * 1.76f, outerRadius * 1.76f)
+                    )
+                }
+
+                // Inner cutout gap between blades and core dot
+                drawCircle(
+                    color = Color(0xFF05060A),
+                    radius = innerHoleRadius,
+                    center = center
+                )
+
+                // Central Radioactive Core Dot
+                drawCircle(
+                    color = color,
+                    radius = coreDotRadius,
+                    center = center
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Centered video buffering overlay displaying rotating nuclear radiation hazard symbol
+ * with radioactive pulse and neon reactor status text.
+ */
+@Composable
+fun PlayerBufferingOverlay(
+    isBuffering: Boolean,
+    modifier: Modifier = Modifier,
+    statusText: String = "SYNCHRONIZING STREAM..."
+) {
+    AnimatedVisibility(
+        visible = isBuffering,
+        enter = fadeIn(animationSpec = tween(150)),
+        exit = fadeOut(animationSpec = tween(250)),
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = Color(0xDD080C14),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.2.dp, NeonCyberCyan.copy(alpha = 0.7f)),
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    NuclearRadiationBufferingIndicator(
+                        size = 56.dp,
+                        color = NeonCyberCyan,
+                        glowColor = NeonToxicGreen
+                    )
+                    Text(
+                        text = statusText,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Double-tap seek visual indicator with expanding neon ripple waves and ±10s badge.
+ */
+@Composable
+fun DoubleTapSeekRippleOverlay(
+    side: String?,
+    timestamp: Long,
+    modifier: Modifier = Modifier
+) {
+    if (side == null || timestamp == 0L) return
+
+    val transition = remember(timestamp) { Animatable(0f) }
+    LaunchedEffect(timestamp) {
+        transition.snapTo(0f)
+        transition.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing)
+        )
+    }
+
+    val progress = transition.value
+    if (progress >= 1f) return
+
+    val isLeft = side == "left"
+    val alpha = (1f - progress).coerceIn(0f, 1f)
+    val scale = 0.6f + (progress * 0.9f)
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .fillMaxWidth(0.48f)
+            .graphicsLayer { this.alpha = alpha },
+        contentAlignment = if (isLeft) Alignment.CenterStart else Alignment.CenterEnd
+    ) {
+        // Expanding circular ripple wave
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center = if (isLeft) Offset(0f, size.height / 2f) else Offset(size.width, size.height / 2f)
+            val maxR = size.width * 1.2f * scale
+            drawCircle(
+                color = NeonCyberCyan.copy(alpha = 0.18f * (1f - progress)),
+                radius = maxR,
+                center = center
+            )
+            drawCircle(
+                color = NeonToxicGreen.copy(alpha = 0.35f * (1f - progress)),
+                radius = maxR * 0.7f,
+                center = center,
+                style = Stroke(width = 3.dp.toPx())
+            )
+        }
+
+        // Center pill with ±10s label
+        Surface(
+            color = Color(0xCC050811),
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.5.dp, if (isLeft) NeonCyberCyan else NeonToxicGreen),
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .graphicsLayer {
+                    scaleX = 0.85f + (progress * 0.25f)
+                    scaleY = 0.85f + (progress * 0.25f)
+                }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = if (isLeft) "◀◀  10s" else "10s  ▶▶",
+                    color = if (isLeft) NeonCyberCyan else NeonToxicGreen,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Vertical swipe gesture HUD indicator for screen brightness (left) and volume (right).
+ */
+@Composable
+fun PlayerVolumeBrightnessHUD(
+    brightnessLevel: Float?,
+    volumeLevel: Float?,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier.fillMaxSize()) {
+        // Left side: Brightness HUD
+        brightnessLevel?.let { level ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 28.dp)
+            ) {
+                Surface(
+                    color = Color(0xDD070B14),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, NeonElectricGold.copy(alpha = 0.7f)),
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "☀",
+                            color = NeonElectricGold,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(6.dp)
+                                .height(100.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF202636)),
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(level.coerceIn(0f, 1f))
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(NeonElectricGold, NeonHazardAmber)
+                                        )
+                                    )
+                            )
+                        }
+                        Text(
+                            text = "${(level.coerceIn(0f, 1f) * 100).toInt()}%",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+
+        // Right side: Volume HUD
+        volumeLevel?.let { level ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 28.dp)
+            ) {
+                Surface(
+                    color = Color(0xDD070B14),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, NeonToxicGreen.copy(alpha = 0.7f)),
+                    shadowElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "🔊",
+                            color = NeonToxicGreen,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(6.dp)
+                                .height(100.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF202636)),
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(level.coerceIn(0f, 1f))
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(NeonToxicGreen, NeonCyberCyan)
+                                        )
+                                    )
+                            )
+                        }
+                        Text(
+                            text = "${(level.coerceIn(0f, 1f) * 100).toInt()}%",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Global Tap Blocker and Nuclear Buffering Overlay for slow internet and network operations.
+ * Absorbs all touch events while active to prevent spam or glitch states on sluggish connections.
+ */
+@Composable
+fun GlobalNetworkBufferingOverlay(
+    isLoading: Boolean,
+    message: String = "REACTOR BUFFERING...",
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = isLoading,
+        enter = fadeIn(tween(150)),
+        exit = fadeOut(tween(250)),
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.65f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {} // Intercept all taps
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = Color(0xF2080D18),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.5.dp, NeonCyberCyan),
+                shadowElevation = 16.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    NuclearRadiationBufferingIndicator(
+                        size = 64.dp,
+                        color = NeonCyberCyan,
+                        glowColor = NeonToxicGreen
+                    )
+                    Text(
+                        text = message,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "SLOW CONNECTION DETECTED",
+                        color = NeonToxicGreen,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    }
+}
+

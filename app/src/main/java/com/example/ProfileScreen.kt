@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -53,7 +55,8 @@ import com.google.firebase.database.ValueEventListener
 @Composable
 fun ProfileScreen(
     onNavigateBack: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onNavigateToRoomHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val auth = remember { FirebaseAuth.getInstance() }
@@ -80,6 +83,15 @@ fun ProfileScreen(
     var isPickingAvatar by remember { mutableStateOf(false) }
     var isSavingName by remember { mutableStateOf(false) }
     var saveSuccessTime by remember { mutableStateOf(0L) }
+    var createdRoomsCount by remember { mutableStateOf(RoomHistoryManager.getCreatedRooms(context, uid).size) }
+
+    LaunchedEffect(uid) {
+        if (uid.isNotBlank()) {
+            RoomHistoryManager.syncWithCloud(context, uid) { synced ->
+                createdRoomsCount = synced.size
+            }
+        }
+    }
 
     fun performSaveName(onComplete: (() -> Unit)? = null) {
         val cleanName = nameInput.trim()
@@ -89,6 +101,7 @@ fun ProfileScreen(
         }
 
         isSavingName = true
+        AppBufferingController.show("SAVING PROFILE TO REACTOR CORE...")
         name = cleanName
 
         UserProfileStorage.saveNameEverywhere(
@@ -96,12 +109,14 @@ fun ProfileScreen(
             name = cleanName,
             onSuccess = {
                 isSavingName = false
+                AppBufferingController.hide()
                 saveSuccessTime = System.currentTimeMillis()
                 Toast.makeText(context, "Name saved successfully!", Toast.LENGTH_SHORT).show()
                 onComplete?.invoke()
             },
             onFailure = { err ->
                 isSavingName = false
+                AppBufferingController.hide()
                 Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                 onComplete?.invoke()
             }
@@ -533,6 +548,89 @@ fun ProfileScreen(
                             color = Color(0xFF8A95A5),
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 6.dp)
+                        )
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 18.dp),
+                            color = Color(0xFF1E2638)
+                        )
+
+                        // Room History Field & Navigation Menu
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "ROOM HISTORY",
+                                    color = Color(0xFF8A92A6),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 1.sp
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "$createdRoomsCount ROOMS ARCHIVED",
+                                        color = NeonToxicGreen,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .background(NeonToxicGreen, CircleShape)
+                                            .shadow(4.dp, CircleShape, spotColor = NeonToxicGreen)
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = Color(0xFF10192A),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, NeonCyberCyan.copy(alpha = 0.6f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    NuclearRadiationBufferingIndicator(
+                                        size = 12.dp,
+                                        color = NeonCyberCyan,
+                                        glowColor = NeonToxicGreen
+                                    )
+                                    Text(
+                                        text = "ARCHIVE",
+                                        color = NeonCyberCyan,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "Permanent telemetry archive of all rooms created by you. Open to inspect joined participants, stream links, and room codes.",
+                            color = Color(0xFF8A95A5),
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        FuturisticHazardButton(
+                            text = "OPEN ROOM HISTORY →",
+                            onClick = { onNavigateToRoomHistory() },
+                            gradient = listOf(Color(0xFF00E5FF), Color(0xFF39FF14)),
+                            height = 44.dp,
+                            cornerRadius = 10.dp
                         )
                     }
                 }

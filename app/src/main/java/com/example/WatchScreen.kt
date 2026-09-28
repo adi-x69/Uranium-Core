@@ -98,6 +98,10 @@ import com.example.ui.theme.VioletGlow
 import com.example.ui.theme.OnlineGreen
 import com.example.ui.theme.DisplayFontFamily
 import com.example.ui.theme.BodyFontFamily
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.font.FontFamily
+import android.media.AudioManager
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -115,11 +119,8 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.options.IFramePlayerOptions
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -259,52 +260,7 @@ fun WatchScreen(
         onDispose { participantsRef.removeEventListener(listener) }
     }
 
-    // ---- Video sync state (mirrors RoomScreen's model) ----
-    var isYouTubeMode by remember { mutableStateOf(false) }
-    var currentYtId by remember { mutableStateOf("") }
-    var videoTitle by remember { mutableStateOf("Video") }
-    var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
-    var lastLoadedYtId by remember { mutableStateOf<String?>(null) }
-    var currentQualityLabel by remember { mutableStateOf<String?>("Auto") }
-    var internalWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
-    var isSettingsOpen by remember { mutableStateOf(false) }
-
-    fun applyYouTubeQuality(qualityKey: String) {
-        val qualityCode = when (qualityKey) {
-            "1080p" -> "hd1080"
-            "720p" -> "hd720"
-            "480p" -> "large"
-            "360p" -> "medium"
-            "240p" -> "small"
-            else -> "default"
-        }
-        currentQualityLabel = when (qualityKey) {
-            "1080p" -> "1080p"
-            "720p" -> "720p"
-            "480p" -> "480p"
-            "360p" -> "360p"
-            "240p" -> "240p"
-            else -> "Auto"
-        }
-        val js = """
-            (function() {
-                try {
-                    if (typeof player !== 'undefined' && player) {
-                        if (typeof player.setPlaybackQuality === 'function') {
-                            player.setPlaybackQuality('$qualityCode');
-                        }
-                        if (typeof player.setPlaybackQualityRange === 'function') {
-                            player.setPlaybackQualityRange('$qualityCode', '$qualityCode');
-                        }
-                    }
-                } catch(e) {}
-            })();
-        """.trimIndent()
-        internalWebView?.evaluateJavascript(js, null)
-    }
-    var ytCurrentTimeMs by remember { mutableStateOf(0L) }
-    var ytDurationMs by remember { mutableStateOf(0L) }
-    var isYtBuffering by remember { mutableStateOf(false) }
+    // ---- Video sync state for Direct Link Stream (Pure ExoPlayer) ----
     var isPlayingState by remember { mutableStateOf(false) }
     var roomIsPlaying by remember { mutableStateOf(false) }
     var isApplyingRemoteState by remember { mutableStateOf(false) }
@@ -313,31 +269,17 @@ fun WatchScreen(
     val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
     var isUserSeeking by remember { mutableStateOf(false) }
 
-    LaunchedEffect(currentYtId, canControl) {
-        if (currentYtId.isNotEmpty()) {
-            withContext(Dispatchers.IO) {
-                try {
-                    val url = java.net.URL("https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$currentYtId&format=json")
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    if (conn.responseCode == 200) {
-                        val body = conn.inputStream.bufferedReader().use { it.readText() }
-                        val json = org.json.JSONObject(body)
-                        val fetched = json.optString("title", "")
-                        if (fetched.isNotEmpty()) {
-                            withContext(Dispatchers.Main) {
-                                videoTitle = fetched
-                                if (canControl) {
-                                    db.child("videoTitle").setValue(fetched)
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-    }
+    // Precision Touch Gestures State: Double-tap seek & Swipe brightness/volume
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var brightnessLevel by remember { mutableStateOf<Float?>(null) }
+    var volumeLevel by remember { mutableStateOf<Float?>(null) }
+    var isLeftDrag by remember { mutableStateOf(false) }
+    var isRightDrag by remember { mutableStateOf(false) }
+    var hudDismissJob by remember { mutableStateOf<Job?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    var seekFlashSide by remember { mutableStateOf<String?>(null) }
+    var seekFlashTimestamp by remember { mutableStateOf(0L) }
+
 
     // Load the saved header rules / Pause switch once before the player is built.
     remember { HeaderSettings.ensureLoaded(context) }
@@ -349,9 +291,13 @@ fun WatchScreen(
     val exoPlayer = remember {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
+            .setUserAgent(AppConfig.VIDEO_USER_AGENT)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(30000)
         val dataSourceFactory = ResolvingDataSource.Factory(httpFactory) { spec ->
-            val headers = AppConfig.resolveVideoHeaders(currentVideoUrl.get())
-                .ifEmpty { AppConfig.resolveVideoHeaders(spec.uri.toString()) }
+            val uriStr = spec.uri.toString()
+            val headers = AppConfig.resolveVideoHeaders(uriStr)
+                .ifEmpty { AppConfig.resolveVideoHeaders(currentVideoUrl.get()) }
             if (headers.isEmpty()) spec else spec.withAdditionalHeaders(headers)
         }
         val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
@@ -416,25 +362,12 @@ fun WatchScreen(
     var lastUpdatedAtSnapshot by remember { mutableStateOf(0L) }
     val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
 
-    // Single source of truth for loading a YouTube video into the player.
-    LaunchedEffect(youtubePlayer, currentYtId) {
-        val player = youtubePlayer ?: return@LaunchedEffect
-        if (currentYtId.isNotEmpty() && currentYtId != lastLoadedYtId) {
-            val shouldPlay = isPlayingState || roomIsPlaying
-            val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
-            val startSec = (expected / 1000f).coerceAtLeast(0f)
-            if (shouldPlay) player.loadVideo(currentYtId, startSec)
-            else player.cueVideo(currentYtId, startSec)
-            lastLoadedYtId = currentYtId
-        }
-    }
 
     // Live position tracking for ExoPlayer (smooth UI slider & timestamps)
     var exoCurrentPositionMs by remember { mutableStateOf(0L) }
     var exoDurationMs by remember { mutableStateOf(0L) }
 
-    LaunchedEffect(isYouTubeMode) {
-        if (isYouTubeMode) return@LaunchedEffect
+    LaunchedEffect(Unit) {
         while (true) {
             exoCurrentPositionMs = exoPlayer.currentPosition
             exoDurationMs = exoPlayer.duration.coerceAtLeast(0L)
@@ -448,7 +381,7 @@ fun WatchScreen(
     }
 
     // Broadcast my own buffering state, debounced (800ms) so quick seek-loads don't flicker.
-    val isLocalBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
+    val isLocalBuffering = localPlaybackState == Player.STATE_BUFFERING
     LaunchedEffect(isLocalBuffering) {
         if (isLocalBuffering) {
             delay(800)
@@ -478,7 +411,6 @@ fun WatchScreen(
 
     // When this device finishes buffering, smoothly catch up if drifted.
     LaunchedEffect(localPlaybackState) {
-        if (isYouTubeMode) return@LaunchedEffect
         if (localPlaybackState == Player.STATE_READY && isPlayingState && !isUserSeeking) {
             val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, exoDurationMs)
             val drift = abs(exoPlayer.currentPosition - expected)
@@ -494,7 +426,7 @@ fun WatchScreen(
     }
 
     // Background drift monitor (checks every 3.5s, auto-catches up without micro-stutter)
-    LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
+    LaunchedEffect(isPlayingState, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
         if (!isPlayingState || isUserSeeking) {
             showSyncNowButton = false
             return@LaunchedEffect
@@ -502,48 +434,31 @@ fun WatchScreen(
         while (true) {
             delay(3500)
             if (!isPlayingState || isUserSeeking) break
-            val isBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
+            val isBuffering = localPlaybackState == Player.STATE_BUFFERING
             if (!isBuffering) {
-                val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
-                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
-                val current = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition
+                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, exoDurationMs)
+                val current = exoPlayer.currentPosition
                 val drift = abs(current - expected)
-                if (isYouTubeMode) {
-                    if (drift > 8000L) {
-                        youtubePlayer?.seekTo(expected / 1000f)
-                        ytCurrentTimeMs = expected
-                    }
-                    showSyncNowButton = drift > 5000L
+                if (drift in 1500L..5000L) {
+                    exoPlayer.seekTo(expected)
+                    showSyncNowButton = false
+                } else if (drift > 5000L) {
+                    showSyncNowButton = true
                 } else {
-                    if (drift in 1500L..5000L) {
-                        exoPlayer.seekTo(expected)
-                        showSyncNowButton = false
-                    } else if (drift > 5000L) {
-                        showSyncNowButton = true
-                    } else {
-                        showSyncNowButton = false
-                    }
+                    showSyncNowButton = false
                 }
             }
         }
     }
 
     fun syncNow() {
-        val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
-        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
-        if (isYouTubeMode) {
-            youtubePlayer?.seekTo(target / 1000f)
-            ytCurrentTimeMs = target
-        } else {
-            exoPlayer.seekTo(target)
-        }
+        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, exoDurationMs)
+        exoPlayer.seekTo(target)
         showSyncNowButton = false
         bumpInteraction()
     }
 
-    // ---- Network status icon: shows if EITHER person has a connection issue -
-    // my phone's actual network state (wifi/data lost or unvalidated), OR
-    // either side's video buffering. Hidden entirely when everything's fine. ----
+    // ---- Network status icon: shows if EITHER person has a connection issue ----
     var hasNetworkIssue by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -581,27 +496,20 @@ fun WatchScreen(
                 "lastUpdatedAt" to ServerValue.TIMESTAMP
             )
         )
-        val currentUrl = if (isYouTubeMode) "https://www.youtube.com/watch?v=$currentYtId"
-            else exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
+        val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
         if (currentUrl != null) {
-            recordContinueWatching(usersRef, uid, roomCode, currentUrl, positionMs, isYouTube = isYouTubeMode)
+            recordContinueWatching(usersRef, uid, roomCode, currentUrl, positionMs, isYouTube = false)
         }
     }
 
     // Mirror room state
     var prevRoomPlaying by remember { mutableStateOf<Boolean?>(null) }
-    var prevRemoteUpdatedAt by remember { mutableStateOf(0L) }
     DisposableEffect(roomCode) {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (!snapshot.exists()) return
                 hostUid = snapshot.child("hostUid").getValue(String::class.java) ?: hostUid
                 controlsUnlocked = snapshot.child("controlsUnlocked").getValue(Boolean::class.java) ?: false
-
-                val remoteTitle = snapshot.child("videoTitle").getValue(String::class.java)
-                if (!remoteTitle.isNullOrEmpty()) {
-                    videoTitle = remoteTitle
-                }
 
                 val lastUpdatedBy = snapshot.child("lastUpdatedBy").getValue(String::class.java) ?: ""
                 val isSelfEcho = lastUpdatedBy == uid
@@ -623,40 +531,24 @@ fun WatchScreen(
                 roomIsPlaying = isPlaying
                 isPlayingState = isPlaying
 
-                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, if (isYouTubeMode) ytDurationMs else exoDurationMs)
+                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, exoDurationMs)
 
                 isApplyingRemoteState = true
-                val ytId = getYoutubeVideoId(videoUrl)
-                if (ytId != null) {
-                    isYouTubeMode = true
-                    if (currentYtId != ytId) {
-                        currentYtId = ytId
-                        ytCurrentTimeMs = targetPosition
-                        if (isPlaying) youtubePlayer?.loadVideo(ytId, targetPosition / 1000f)
-                        else youtubePlayer?.cueVideo(ytId, targetPosition / 1000f)
-                        lastLoadedYtId = ytId
-                    } else if (!isSelfEcho) {
-                        val isExplicitSeek = lastUpdatedAt != prevRemoteUpdatedAt && lastUpdatedAt > 0L
-                        val drift = abs(ytCurrentTimeMs - targetPosition)
-                        if ((isExplicitSeek && drift > 2000L) || drift > 6500L) {
-                            if (!isUserSeeking) {
-                                youtubePlayer?.seekTo(targetPosition / 1000f)
-                                ytCurrentTimeMs = targetPosition
-                            }
-                        }
-                        if (isPlaying) {
-                            if (!isPlayingState) youtubePlayer?.play()
-                        } else {
-                            if (isPlayingState) youtubePlayer?.pause()
-                        }
-                    }
-                    prevRemoteUpdatedAt = lastUpdatedAt
-                } else if (videoUrl.isNotEmpty()) {
-                    isYouTubeMode = false
+                if (videoUrl.isNotEmpty()) {
                     val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
                     if (currentMediaUri != videoUrl) {
                         currentVideoUrl.set(videoUrl)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
+                        val mediaItem = MediaItem.Builder()
+                            .setUri(videoUrl)
+                            .apply {
+                                if (videoUrl.contains(".m3u8", ignoreCase = true) || videoUrl.contains("/hls", ignoreCase = true)) {
+                                    setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                                } else if (videoUrl.contains(".mpd", ignoreCase = true) || videoUrl.contains("/dash", ignoreCase = true)) {
+                                    setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+                                }
+                            }
+                            .build()
+                        exoPlayer.setMediaItem(mediaItem)
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = isPlaying
                         if (targetPosition > 0L) exoPlayer.seekTo(targetPosition)
@@ -701,6 +593,9 @@ fun WatchScreen(
                     roomIsPlaying = false
                     pushPlaybackUpdate(false, exoPlayer.duration.coerceAtLeast(0L))
                 }
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                android.util.Log.e("WatchScreen", "ExoPlayer error: ${error.errorCodeName} (${error.errorCode})", error)
             }
         }
         exoPlayer.addListener(playerListener)
@@ -929,37 +824,19 @@ fun WatchScreen(
         bumpInteraction()
     }
 
-    // ---- Skip back/forward: shared by the overlay buttons AND double-tap-to-seek,
-    // so both paths stay in sync with each other and with Firebase. No-ops (silently)
-    // if this user doesn't have control - same gating as every other playback action. ----
+    // ---- Skip back/forward: shared by overlay buttons AND double-tap-to-seek ----
     fun skip(deltaMs: Long) {
         if (!canControl) return
         val willPlay = isPlayingState || roomIsPlaying
-        if (isYouTubeMode) {
-            val ceiling = if (ytDurationMs > 0) ytDurationMs else Long.MAX_VALUE
-            val newPos = (ytCurrentTimeMs + deltaMs).coerceIn(0L, ceiling)
-            youtubePlayer?.seekTo(newPos / 1000f)
-            ytCurrentTimeMs = newPos
-            if (willPlay) youtubePlayer?.play()
-            pushPlaybackUpdate(willPlay, newPos)
-        } else {
-            val ceiling = exoPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-            val newPos = (exoPlayer.currentPosition + deltaMs).coerceIn(0L, ceiling)
-            exoPlayer.seekTo(newPos)
-            if (willPlay) exoPlayer.playWhenReady = true
-            pushPlaybackUpdate(willPlay, newPos)
-        }
+        val ceiling = exoPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+        val newPos = (exoPlayer.currentPosition + deltaMs).coerceIn(0L, ceiling)
+        exoPlayer.seekTo(newPos)
+        exoCurrentPositionMs = newPos
+        if (willPlay) exoPlayer.playWhenReady = true
+        pushPlaybackUpdate(willPlay, newPos)
         bumpInteraction()
     }
 
-    // "left"/"right" + a nonce (so repeated taps on the same side still restart the fade)
-    var seekFlash by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    LaunchedEffect(seekFlash) {
-        if (seekFlash != null) {
-            delay(500)
-            seekFlash = null
-        }
-    }
 
     // ---- Video area (shared between fullscreen and chat-mode layouts) ----
     val videoAspect = 16f / 9f
@@ -976,340 +853,97 @@ fun WatchScreen(
                         },
                         onDoubleTap = { offset ->
                             if (!canControl) return@detectTapGestures
-                            val third = size.width / 3
-                            when {
-                                offset.x < third -> {
-                                    skip(-10000L)
-                                    seekFlash = "left" to System.nanoTime()
+                            val isLeft = offset.x < (size.width / 2f)
+                            if (isLeft) {
+                                skip(-10000L)
+                                seekFlashSide = "left"
+                                seekFlashTimestamp = System.currentTimeMillis()
+                            } else {
+                                skip(10000L)
+                                seekFlashSide = "right"
+                                seekFlashTimestamp = System.currentTimeMillis()
+                            }
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            isLeftDrag = offset.x < (size.width / 2f)
+                            isRightDrag = !isLeftDrag
+                            hudDismissJob?.cancel()
+                        },
+                        onDragEnd = {
+                            hudDismissJob = coroutineScope.launch {
+                                delay(1200)
+                                brightnessLevel = null
+                                volumeLevel = null
+                            }
+                        },
+                        onDragCancel = {
+                            brightnessLevel = null
+                            volumeLevel = null
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount / 450f
+                            if (isLeftDrag) {
+                                val currentAttr = activity?.window?.attributes?.screenBrightness ?: 0.5f
+                                val base = if (currentAttr < 0f) 0.5f else currentAttr
+                                val newBrightness = (base + delta).coerceIn(0.02f, 1f)
+                                activity?.window?.let { win ->
+                                    val lp = win.attributes
+                                    lp.screenBrightness = newBrightness
+                                    win.attributes = lp
                                 }
-                                offset.x > size.width - third -> {
-                                    skip(10000L)
-                                    seekFlash = "right" to System.nanoTime()
+                                brightnessLevel = newBrightness
+                            } else if (isRightDrag) {
+                                val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                val volDelta = (-dragAmount / 35f).toInt()
+                                if (volDelta != 0) {
+                                    val newVol = (currentVol + volDelta).coerceIn(0, maxVol)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+                                    volumeLevel = newVol.toFloat() / maxVol.toFloat()
+                                } else {
+                                    volumeLevel = currentVol.toFloat() / maxVol.toFloat()
                                 }
-                                else -> bumpInteraction()
                             }
                         }
                     )
                 }
         ) {
-            if (isYouTubeMode) {
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val containerAspect = maxWidth / maxHeight
-                    val targetAspect = 16f / 9f
-                    // Keeps EXACT video size and ratio as YouTube's default landscape player.
-                    val videoModifier = if (containerAspect > targetAspect) {
-                        Modifier
-                            .fillMaxHeight()
-                            .aspectRatio(targetAspect, matchHeightConstraintsFirst = true)
-                    } else {
-                        Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(targetAspect, matchHeightConstraintsFirst = false)
+            // Pure ExoPlayer Direct Stream View
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        player = exoPlayer
+                        useController = false
                     }
+                },
+                onRelease = { playerView ->
+                    playerView.player = null
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
-                    Box(
-                        modifier = videoModifier,
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AndroidView(
-                            factory = { ctx ->
-                                YouTubePlayerView(ctx).apply {
-                                    enableAutomaticInitialization = false
-                                    lifecycleOwner.lifecycle.addObserver(this)
+            // Centered Rotating Nuclear Radiation Hazard Buffering Indicator
+            PlayerBufferingOverlay(
+                isBuffering = (localPlaybackState == Player.STATE_BUFFERING),
+                statusText = "BUFFERING REACTOR STREAM..."
+            )
 
-                                    fun configureInternalWebView(view: android.view.View) {
-                                        if (view is android.webkit.WebView) {
-                                            internalWebView = view
-                                            view.settings.mediaPlaybackRequiresUserGesture = false
-                                            view.settings.javaScriptEnabled = true
-                                            view.settings.domStorageEnabled = true
-                                            view.settings.databaseEnabled = true
-                                            view.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-                                            view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                                            view.isLongClickable = false
-                                            view.setOnLongClickListener { true }
+            // Double-Tap 10s Seek Ripple Wave Overlay
+            DoubleTapSeekRippleOverlay(
+                side = seekFlashSide,
+                timestamp = seekFlashTimestamp
+            )
 
-                                            val disable2xAndClutterScript = """
-                                                (function() {
-                                                    window.addEventListener('contextmenu', function(e) { e.preventDefault(); }, true);
-                                                    
-                                                    var styleId = 'yt-custom-clean-style';
-                                                    if (!document.getElementById(styleId)) {
-                                                        var style = document.createElement('style');
-                                                        style.id = styleId;
-                                                        style.innerHTML = `
-                                                            .ytp-chrome-top,
-                                                            .ytp-chrome-bottom,
-                                                            .ytp-pause-overlay,
-                                                            .ytp-pause-overlay-container,
-                                                            .ytp-endscreen-content,
-                                                            .ytp-endscreen-paginate,
-                                                            .ytp-ce-element,
-                                                            .ytp-ce-covering-overlay,
-                                                            .ytp-ce-expanding-overlay,
-                                                            .ytp-watermark,
-                                                            .ytp-gradient-top,
-                                                            .ytp-gradient-bottom,
-                                                            .ytp-title-channel,
-                                                            .ytp-share-button,
-                                                            .ytp-watch-later-button,
-                                                            .ytp-suggestion-set,
-                                                            .ytp-contextmenu,
-                                                            .ytp-related-on-error-overlay,
-                                                            .ytp-show-cards-title,
-                                                            .ytp-cards-teaser,
-                                                            .ytp-bezel,
-                                                            .ytp-bezel-text,
-                                                            a[href*="youtube.com"],
-                                                            .ytp-button[aria-label*="Like"],
-                                                            .ytp-button[aria-label*="Dislike"],
-                                                            .ytp-button[aria-label*="Share"],
-                                                            .ytp-share-panel {
-                                                                display: none !important;
-                                                                visibility: hidden !important;
-                                                                opacity: 0 !important;
-                                                                pointer-events: none !important;
-                                                                width: 0 !important;
-                                                                height: 0 !important;
-                                                            }
-                                                            html, body, #player, .html5-video-player, .html5-video-container {
-                                                                width: 100% !important;
-                                                                height: 100% !important;
-                                                                background: #000000 !important;
-                                                                overflow: hidden !important;
-                                                            }
-                                                            video {
-                                                                object-fit: contain !important;
-                                                            }
-                                                        `;
-                                                        (document.head || document.documentElement).appendChild(style);
-                                                    }
-
-                                                    function cleanAndLockRate() {
-                                                        var removeSelectors = [
-                                                            '.ytp-chrome-top', '.ytp-chrome-bottom', '.ytp-pause-overlay',
-                                                            '.ytp-endscreen-content', '.ytp-ce-element', '.ytp-watermark',
-                                                            '.ytp-gradient-top', '.ytp-gradient-bottom', '.ytp-share-button',
-                                                            '.ytp-watch-later-button', '.ytp-suggestion-set', '.ytp-contextmenu',
-                                                            '.ytp-show-cards-title'
-                                                        ];
-                                                        for (var s = 0; s < removeSelectors.length; s++) {
-                                                            var els = document.querySelectorAll(removeSelectors[s]);
-                                                            for (var j = 0; j < els.length; j++) {
-                                                                els[j].style.setProperty('display', 'none', 'important');
-                                                                els[j].style.setProperty('visibility', 'hidden', 'important');
-                                                            }
-                                                        }
-
-                                                        var vids = document.getElementsByTagName('video');
-                                                        for (var i = 0; i < vids.length; i++) {
-                                                            var v = vids[i];
-                                                            if (!v.__rateLocked) {
-                                                                v.__rateLocked = true;
-                                                                v.addEventListener('ratechange', function(e) {
-                                                                    if (this.playbackRate > 1.05 || this.playbackRate < 0.95) {
-                                                                        this.playbackRate = 1.0;
-                                                                    }
-                                                                }, true);
-                                                            }
-                                                            if (v.playbackRate > 1.05 || v.playbackRate < 0.95) {
-                                                                v.playbackRate = 1.0;
-                                                            }
-                                                        }
-                                                        if (typeof player !== 'undefined' && player && typeof player.getPlaybackRate === 'function') {
-                                                            if (player.getPlaybackRate() !== 1) {
-                                                                player.setPlaybackRate(1);
-                                                            }
-                                                        }
-                                                    }
-                                                    setInterval(cleanAndLockRate, 250);
-                                                    cleanAndLockRate();
-                                                })();
-                                            """.trimIndent()
-                                            view.evaluateJavascript(disable2xAndClutterScript, null)
-                                        }
-                                        if (view is android.view.ViewGroup) {
-                                            for (i in 0 until view.childCount) {
-                                                configureInternalWebView(view.getChildAt(i))
-                                            }
-                                        }
-                                    }
-                                    configureInternalWebView(this)
-                                    setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
-                                        override fun onChildViewAdded(parent: android.view.View?, child: android.view.View?) {
-                                            child?.let { configureInternalWebView(it) }
-                                        }
-                                        override fun onChildViewRemoved(parent: android.view.View?, child: android.view.View?) {}
-                                    })
-
-                                    val iFrameOptions = IFramePlayerOptions.Builder(ctx)
-                                        .controls(0)
-                                        .autoplay(1)
-                                        .rel(0)
-                                        .ivLoadPolicy(3)
-                                        .ccLoadPolicy(0)
-                                        .build()
-
-                                    initialize(
-                                        youTubePlayerListener = object : AbstractYouTubePlayerListener() {
-                                            override fun onReady(youTubePlayer: YouTubePlayer) {
-                                                youtubePlayer = youTubePlayer
-                                                youTubePlayer.unMute()
-                                                youTubePlayer.setVolume(100)
-                                                post {
-                                                    configureInternalWebView(this@apply)
-                                                    internalWebView?.evaluateJavascript(
-                                                        "(function() { try { return (player && player.getVideoData) ? player.getVideoData().title : ''; } catch(e) { return ''; } })()"
-                                                    ) { res ->
-                                                        val cleaned = res?.trim('"', ' ') ?: ""
-                                                        if (cleaned.isNotEmpty() && cleaned != "null" && cleaned != "undefined") {
-                                                            videoTitle = cleaned
-                                                        }
-                                                    }
-                                                }
-                                                if (currentYtId.isNotEmpty()) {
-                                                    val shouldPlay = isPlayingState || roomIsPlaying
-                                                    val expected = calculateExpectedPosition(lastKnownPosition, shouldPlay, lastUpdatedAtSnapshot, ytDurationMs)
-                                                    val startSec = (expected / 1000f).coerceAtLeast(0f)
-                                                    if (shouldPlay) {
-                                                        youTubePlayer.loadVideo(currentYtId, startSec)
-                                                    } else {
-                                                        youTubePlayer.cueVideo(currentYtId, startSec)
-                                                    }
-                                                    lastLoadedYtId = currentYtId
-                                                }
-                                            }
-
-                                            override fun onError(youTubePlayer: YouTubePlayer, error: PlayerConstants.PlayerError) {
-                                                android.util.Log.e("WatchScreen", "YouTube player error: $error")
-                                                if ((error == PlayerConstants.PlayerError.VIDEO_NOT_PLAYABLE_IN_EMBEDDED_PLAYER ||
-                                                     error == PlayerConstants.PlayerError.REQUEST_MISSING_HTTP_REFERER) && currentYtId.isNotEmpty()) {
-                                                    youTubePlayer.cueVideo(currentYtId, 0f)
-                                                }
-                                            }
-
-                                         override fun onStateChange(youTubePlayer: YouTubePlayer, state: PlayerConstants.PlayerState) {
-                                            when (state) {
-                                                PlayerConstants.PlayerState.PLAYING -> {
-                                                    isPlayingState = true
-                                                    isYtBuffering = false
-                                                }
-                                                PlayerConstants.PlayerState.PAUSED -> {
-                                                    isYtBuffering = false
-                                                    isPlayingState = false
-                                                }
-                                                PlayerConstants.PlayerState.BUFFERING -> {
-                                                    isYtBuffering = true
-                                                }
-                                                PlayerConstants.PlayerState.ENDED -> {
-                                                    isPlayingState = false
-                                                    roomIsPlaying = false
-                                                    isYtBuffering = false
-                                                    if (canControl) {
-                                                        pushPlaybackUpdate(false, ytDurationMs.coerceAtLeast(0L))
-                                                    }
-                                                }
-                                                else -> {}
-                                            }
-                                        }
-
-                                        override fun onCurrentSecond(youTubePlayer: YouTubePlayer, second: Float) {
-                                            ytCurrentTimeMs = (second * 1000).toLong()
-                                        }
-
-                                        override fun onVideoDuration(youTubePlayer: YouTubePlayer, duration: Float) {
-                                            ytDurationMs = (duration * 1000).toLong()
-                                        }
-
-                                        override fun onPlaybackQualityChange(
-                                            youTubePlayer: YouTubePlayer,
-                                            playbackQuality: PlayerConstants.PlaybackQuality
-                                        ) {
-                                            val raw = playbackQuality.name.lowercase()
-                                            currentQualityLabel = when {
-                                                raw.contains("1080") -> "1080p"
-                                                raw.contains("720") -> "720p"
-                                                raw.contains("highres") || raw.contains("high_res") -> "1440p+"
-                                                raw.contains("large") -> "480p"
-                                                raw.contains("medium") -> "360p"
-                                                raw.contains("small") -> "240p"
-                                                raw.contains("tiny") -> "144p"
-                                                else -> null
-                                            }
-                                        }
-
-                                        override fun onPlaybackRateChange(
-                                            youTubePlayer: YouTubePlayer,
-                                            playbackRate: PlayerConstants.PlaybackRate
-                                        ) {
-                                            // Prevent 2x playback speed: force back to 1x normal speed immediately
-                                            if (playbackRate != PlayerConstants.PlaybackRate.RATE_1) {
-                                                youTubePlayer.setPlaybackRate(PlayerConstants.PlaybackRate.RATE_1)
-                                            }
-                                        }
-                                    },
-                                    handleNetworkEvents = false,
-                                    playerOptions = iFrameOptions
-                                )
-                            }
-                            },
-                            onRelease = { playerView ->
-                                lifecycleOwner.lifecycle.removeObserver(playerView)
-                                playerView.release()
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false
-                        }
-                    },
-                    onRelease = { playerView ->
-                        playerView.player = null
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            // Quality badge & settings button on video. Click to open Quality Control Menu!
-            if (isYouTubeMode) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 12.dp, end = 12.dp)
-                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
-                        .clickable { isSettingsOpen = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Quality Settings",
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = currentQualityLabel ?: "Auto",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
+            // Vertical Swipe Brightness & Volume HUD
+            PlayerVolumeBrightnessHUD(
+                brightnessLevel = brightnessLevel,
+                volumeLevel = volumeLevel
+            )
 
             // Floating emoji reactions
             floatingReactions.forEach { reaction ->
@@ -1319,25 +953,6 @@ fun WatchScreen(
                     }
                 }
             }
-
-            // Double-tap-to-seek flash ("<<10" / "10>>") on whichever side was tapped
-            seekFlash?.let { (side, _) ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.35f)
-                        .align(if (side == "left") Alignment.CenterStart else Alignment.CenterEnd)
-                        .background(Color.Black.copy(alpha = 0.25f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (side == "left") "\u25c0\u25c0 10" else "10 \u25b6\u25b6",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-
             // Join/leave and playback banners, stacked at the top, auto-dismissing
             Column(
                 modifier = Modifier
@@ -1361,24 +976,27 @@ fun WatchScreen(
             // not a quick toast, and isn't tied to the controls auto-hide timer.
             othersBuffering?.let { name ->
                 Surface(
-                    color = Color.Black.copy(alpha = 0.75f),
-                    shape = MaterialTheme.shapes.medium,
+                    color = Color(0xDD0D1322),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, NeonCyberCyan.copy(alpha = 0.6f)),
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White
+                        NuclearRadiationBufferingIndicator(
+                            size = 18.dp,
+                            color = NeonCyberCyan,
+                            glowColor = NeonToxicGreen
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "$name's connection is buffering — paused",
                             color = Color.White,
-                            style = MaterialTheme.typography.labelMedium
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }
@@ -1482,13 +1100,12 @@ fun WatchScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 PlayerControlsOverlay(
-                    videoTitle = videoTitle,
                     isHost = uid == hostUid,
                     canControl = canControl,
                     controlsUnlocked = controlsUnlocked,
                     isPlaying = isPlayingState,
-                    currentMs = if (isYouTubeMode) ytCurrentTimeMs else exoCurrentPositionMs,
-                    durationMs = if (isYouTubeMode) ytDurationMs else exoDurationMs,
+                    currentMs = exoCurrentPositionMs,
+                    durationMs = exoDurationMs,
                     participants = participants,
                     myUid = uid,
                     onBack = onNavigateBack,
@@ -1497,13 +1114,8 @@ fun WatchScreen(
                         val newPlaying = !isPlayingState
                         isPlayingState = newPlaying
                         roomIsPlaying = newPlaying
-                        if (isYouTubeMode) {
-                            if (newPlaying) youtubePlayer?.play() else youtubePlayer?.pause()
-                            pushPlaybackUpdate(newPlaying, ytCurrentTimeMs)
-                        } else {
-                            exoPlayer.playWhenReady = newPlaying
-                            pushPlaybackUpdate(newPlaying, exoPlayer.currentPosition)
-                        }
+                        exoPlayer.playWhenReady = newPlaying
+                        pushPlaybackUpdate(newPlaying, exoPlayer.currentPosition)
                         bumpInteraction()
                     },
                     onSkipBack = { skip(-10000L) },
@@ -1511,14 +1123,8 @@ fun WatchScreen(
                     onSeek = { targetMs ->
                         if (!canControl) return@PlayerControlsOverlay
                         val willPlay = isPlayingState || roomIsPlaying
-                        if (isYouTubeMode) {
-                            youtubePlayer?.seekTo(targetMs / 1000f)
-                            ytCurrentTimeMs = targetMs
-                            if (willPlay) youtubePlayer?.play()
-                        } else {
-                            exoPlayer.seekTo(targetMs)
-                            if (willPlay) exoPlayer.playWhenReady = true
-                        }
+                        exoPlayer.seekTo(targetMs)
+                        if (willPlay) exoPlayer.playWhenReady = true
                         pushPlaybackUpdate(willPlay, targetMs)
                         bumpInteraction()
                     },
@@ -1528,10 +1134,6 @@ fun WatchScreen(
                     onToggleEmojiPicker = { isEmojiPickerOpen = !isEmojiPickerOpen; bumpInteraction() },
                     onToggleUnlock = {
                         db.child("controlsUnlocked").setValue(!controlsUnlocked)
-                        bumpInteraction()
-                    },
-                    onOpenSettings = {
-                        isSettingsOpen = true
                         bumpInteraction()
                     },
                     onSeekingStateChanged = { isUserSeeking = it }
@@ -1588,16 +1190,6 @@ fun WatchScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f).imePadding()
             )
         }
-    }
-
-    if (isSettingsOpen) {
-        VideoQualitySettingsDialog(
-            currentQuality = currentQualityLabel ?: "Auto",
-            onSelectQuality = { qualityKey ->
-                applyYouTubeQuality(qualityKey)
-            },
-            onDismiss = { isSettingsOpen = false }
-        )
     }
 }
 
@@ -1788,7 +1380,6 @@ private fun ParticipantAvatarsRow(participants: List<ParticipantInfo>, excludeUi
 
 @Composable
 private fun PlayerControlsOverlay(
-    videoTitle: String = "",
     isHost: Boolean,
     canControl: Boolean,
     controlsUnlocked: Boolean,
@@ -1807,7 +1398,6 @@ private fun PlayerControlsOverlay(
     onOpenChat: () -> Unit,
     onToggleEmojiPicker: () -> Unit,
     onToggleUnlock: () -> Unit,
-    onOpenSettings: () -> Unit = {},
     onSeekingStateChanged: (Boolean) -> Unit = {}
 ) {
     // Local drag state so the slider follows the finger smoothly instead of
@@ -1818,7 +1408,7 @@ private fun PlayerControlsOverlay(
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.35f))
     ) {
-        // Top bar
+        // Top bar - Clean Direct Stream without title text or quality buttons
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1830,19 +1420,23 @@ private fun PlayerControlsOverlay(
             IconButton(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
-            if (videoTitle.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .background(Color(0xFF0F1524), RoundedCornerShape(8.dp))
+                    .border(1.dp, NeonCyberCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
                 Text(
-                    text = videoTitle,
-                    color = Color.White,
+                    text = "DIRECT STREAM",
+                    color = NeonCyberCyan,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
                 )
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
             }
+            Spacer(modifier = Modifier.weight(1f))
             ParticipantAvatarsRow(participants = participants, excludeUid = myUid)
             Spacer(modifier = Modifier.width(8.dp))
             if (isHost) {
@@ -1855,14 +1449,6 @@ private fun PlayerControlsOverlay(
                 Switch(checked = controlsUnlocked, onCheckedChange = { onToggleUnlock() })
             } else if (!canControl) {
                 Text("Host controls playback", color = Color.White, style = MaterialTheme.typography.labelSmall)
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            IconButton(onClick = onOpenSettings) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Playback Settings",
-                    tint = Color.White
-                )
             }
         }
 
@@ -1923,9 +1509,6 @@ private fun PlayerControlsOverlay(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Default.Settings, contentDescription = "Playback Settings", tint = Color.White)
-                }
                 IconButton(onClick = onToggleEmojiPicker) {
                     Icon(Icons.Default.EmojiEmotions, contentDescription = "Reactions", tint = Color.White)
                 }
@@ -2693,120 +2276,4 @@ private fun formatMillis(ms: Long): String {
     return "%d:%02d".format(minutes, seconds)
 }
 
-@Composable
-private fun VideoQualitySettingsDialog(
-    currentQuality: String,
-    onSelectQuality: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val qualityOptions = listOf(
-        "Auto" to "Auto (Recommended)",
-        "1080p" to "1080p (Full HD)",
-        "720p" to "720p (HD)",
-        "480p" to "480p (SD)",
-        "360p" to "360p (Data Saver)",
-        "240p" to "240p (Low)"
-    )
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1E1E1E),
-        titleContentColor = Color.White,
-        textContentColor = Color.LightGray,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Player Settings",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "Resolution & Video Quality:",
-                    fontSize = 13.sp,
-                    color = Color.LightGray,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                qualityOptions.forEach { (key, label) ->
-                    val isSelected = currentQuality.equals(key, ignoreCase = true) ||
-                        (key == "Auto" && (currentQuality.isEmpty() || currentQuality.equals("auto", ignoreCase = true)))
-
-                    Surface(
-                        onClick = {
-                            onSelectQuality(key)
-                            onDismiss()
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f),
-                        border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = label,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 14.sp
-                            )
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Selected",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Surface(
-                    color = Color.Black.copy(alpha = 0.4f),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "⚡ 2x speed player disabled for smooth sync playback",
-                            fontSize = 11.sp,
-                            color = Color.Gray
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close", color = MaterialTheme.colorScheme.primary)
-            }
-        }
-    )
-}

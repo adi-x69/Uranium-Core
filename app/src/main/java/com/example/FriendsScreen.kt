@@ -262,31 +262,40 @@ fun FriendsScreen(
                             }
                         },
                         onUnfriend = { friendUid ->
+                            AppBufferingController.show("UPDATING SATELLITE NETWORK...")
                             val updates = mapOf(
                                 "users/$myUid/friends/$friendUid" to null,
                                 "users/$friendUid/friends/$myUid" to null
                             )
-                            db.updateChildren(updates)
+                            db.updateChildren(updates).addOnCompleteListener {
+                                AppBufferingController.hide()
+                            }
                         }
                     )
                     1 -> AddFriendTab(myUid = myUid, myFriends = friends, db = db, context = context)
                     2 -> RequestsTab(
                         requests = requests,
                         onAccept = { req ->
+                            AppBufferingController.show("CONFIRMING SATELLITE HANDSHAKE...")
                             val updates = mapOf(
                                 "users/$myUid/friends/${req.fromUid}" to true,
                                 "users/${req.fromUid}/friends/$myUid" to true,
                                 "users/$myUid/friendRequests/incoming/${req.fromUid}" to null,
                                 "users/${req.fromUid}/friendRequests/outgoing/$myUid" to null
                             )
-                            db.updateChildren(updates)
+                            db.updateChildren(updates).addOnCompleteListener {
+                                AppBufferingController.hide()
+                            }
                         },
                         onDecline = { req ->
+                            AppBufferingController.show("DECLINING REQUEST...")
                             val updates = mapOf(
                                 "users/$myUid/friendRequests/incoming/${req.fromUid}" to null,
                                 "users/${req.fromUid}/friendRequests/outgoing/$myUid" to null
                             )
-                            db.updateChildren(updates)
+                            db.updateChildren(updates).addOnCompleteListener {
+                                AppBufferingController.hide()
+                            }
                         }
                     )
                 }
@@ -303,6 +312,7 @@ private fun sendWatchInvite(
     context: android.content.Context,
     onSent: () -> Unit
 ) {
+    AppBufferingController.show("TRANSMITTING WATCH INVITATION...")
     db.child("users").child(myUid).child("username").get().addOnSuccessListener { mySnap ->
         val myUsername = mySnap.getValue(String::class.java) ?: "unknown"
         val inviteRef = db.child("users").child(toUid).child("watchInvites").push()
@@ -314,13 +324,16 @@ private fun sendWatchInvite(
         )
         inviteRef.setValue(invite)
             .addOnSuccessListener {
+                AppBufferingController.hide()
                 Toast.makeText(context, "Watch invite sent!", Toast.LENGTH_SHORT).show()
                 onSent()
             }
             .addOnFailureListener {
+                AppBufferingController.hide()
                 Toast.makeText(context, "Failed to send invite", Toast.LENGTH_SHORT).show()
             }
     }.addOnFailureListener {
+        AppBufferingController.hide()
         Toast.makeText(context, "Failed to send invite", Toast.LENGTH_SHORT).show()
     }
 }
@@ -393,7 +406,10 @@ private fun FriendsListTab(
 
                     Spacer(modifier = Modifier.width(14.dp))
 
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
                         Text(
                             text = friend.username,
                             color = Color.White,
@@ -401,28 +417,6 @@ private fun FriendsListTab(
                             fontSize = 15.sp,
                             fontFamily = FontFamily.Monospace
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val (dotColor, statusLabel) = when (friend.presenceStatus) {
-                                "online" -> NeonToxicGreen to "ONLINE"
-                                "watching" -> NeonCyberCyan to "WATCHING"
-                                else -> Color(0xFF6B7280) to "OFFLINE"
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .background(dotColor, CircleShape)
-                                    .shadow(4.dp, CircleShape, spotColor = dotColor)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = statusLabel,
-                                color = dotColor,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -620,6 +614,7 @@ private fun sendFriendRequest(
     toUsername: String,
     context: android.content.Context
 ) {
+    AppBufferingController.show("TRANSMITTING SATELLITE FRIEND REQUEST...")
     db.child("users").child(myUid).child("username").get().addOnSuccessListener { mySnap ->
         val myUsername = mySnap.getValue(String::class.java) ?: "unknown"
         val updates = mapOf(
@@ -632,9 +627,17 @@ private fun sendFriendRequest(
                 "timestamp" to ServerValue.TIMESTAMP
             )
         )
-        db.updateChildren(updates).addOnFailureListener {
-            Toast.makeText(context, "Failed to send friend request", Toast.LENGTH_SHORT).show()
+        db.updateChildren(updates).addOnCompleteListener { task ->
+            AppBufferingController.hide()
+            if (task.isSuccessful) {
+                Toast.makeText(context, "Friend request sent to @$toUsername!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Failed to send friend request", Toast.LENGTH_SHORT).show()
+            }
         }
+    }.addOnFailureListener {
+        AppBufferingController.hide()
+        Toast.makeText(context, "Network issue: ${it.message}", Toast.LENGTH_SHORT).show()
     }
 }
 

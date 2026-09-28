@@ -101,13 +101,9 @@ import com.example.ui.theme.BodyFontFamily
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.ResolvingDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.PlayerView
+import android.media.AudioManager
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.text.font.FontFamily
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
@@ -115,6 +111,8 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
 import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
@@ -259,8 +257,7 @@ fun YouTubeWatchScreen(
         onDispose { participantsRef.removeEventListener(listener) }
     }
 
-    // ---- Video sync state (mirrors RoomScreen's model) ----
-    var isYouTubeMode by remember { mutableStateOf(true) }
+    // ---- YouTube Video Sync State ----
     var currentYtId by remember { mutableStateOf("") }
     var videoTitle by remember { mutableStateOf("YouTube Video") }
     var youtubePlayer: YouTubePlayer? by remember { mutableStateOf(null) }
@@ -313,6 +310,17 @@ fun YouTubeWatchScreen(
     val canControl = uid.isNotEmpty() && (uid == hostUid || hostUid.isEmpty() || controlsUnlocked)
     var isUserSeeking by remember { mutableStateOf(false) }
 
+    // Precision Touch Gestures State: Double-tap seek & Swipe brightness/volume
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    var brightnessLevel by remember { mutableStateOf<Float?>(null) }
+    var volumeLevel by remember { mutableStateOf<Float?>(null) }
+    var isLeftDrag by remember { mutableStateOf(false) }
+    var isRightDrag by remember { mutableStateOf(false) }
+    var hudDismissJob by remember { mutableStateOf<Job?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    var seekFlashSide by remember { mutableStateOf<String?>(null) }
+    var seekFlashTimestamp by remember { mutableStateOf(0L) }
+
     // Fetch video title directly from YouTube oEmbed API whenever currentYtId changes
     LaunchedEffect(currentYtId, canControl) {
         if (currentYtId.isNotEmpty()) {
@@ -340,31 +348,6 @@ fun YouTubeWatchScreen(
         }
     }
 
-    // Load the saved header rules / Pause switch once before the player is built.
-    remember { HeaderSettings.ensureLoaded(context) }
-
-    // Holds the URL of the video currently loaded, so every request (playlist, segments,
-    // subtitles) gets the Referer/User-Agent that match the main video URL.
-    val currentVideoUrl = remember { java.util.concurrent.atomic.AtomicReference("") }
-
-    val exoPlayer = remember {
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-        val dataSourceFactory = ResolvingDataSource.Factory(httpFactory) { spec ->
-            val headers = AppConfig.resolveVideoHeaders(currentVideoUrl.get())
-                .ifEmpty { AppConfig.resolveVideoHeaders(spec.uri.toString()) }
-            if (headers.isEmpty()) spec else spec.withAdditionalHeaders(headers)
-        }
-        val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
-            .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
-            .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-            .build()
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .setAudioAttributes(audioAttributes, true)
-            .build().apply { playWhenReady = false }
-    }
-
     // ---- UI interaction state ----
     var controlsVisible by remember { mutableStateOf(true) }
     var interactionTick by remember { mutableStateOf(0) }
@@ -379,7 +362,7 @@ fun YouTubeWatchScreen(
     }
 
     LaunchedEffect(interactionTick, isChatMode) {
-        if (isChatMode) return@LaunchedEffect // controls stay visible in chat mode
+        if (isChatMode) return@LaunchedEffect
         delay(3000)
         controlsVisible = false
     }
@@ -409,16 +392,14 @@ fun YouTubeWatchScreen(
         return if (duration > 0L) result.coerceIn(0L, duration) else result.coerceAtLeast(0L)
     }
 
-    // ---- Buffering & Sync State ----
-    var localPlaybackState by remember { mutableStateOf(Player.STATE_IDLE) }
+    // ---- Buffering & Sync State for YouTube ----
     var othersBuffering by remember { mutableStateOf<String?>(null) }
     var showSyncNowButton by remember { mutableStateOf(false) }
     var lastKnownPosition by remember { mutableStateOf(0L) }
     var lastUpdatedAtSnapshot by remember { mutableStateOf(0L) }
     val bufferingRef = remember(roomCode, uid) { db.child("buffering").child(uid) }
 
-    // Single source of truth for actually loading a YouTube video into the player.
-    // Loads new video when video ID is set or changes.
+    // Single source of truth for loading a YouTube video into the player
     LaunchedEffect(youtubePlayer, currentYtId) {
         val player = youtubePlayer ?: return@LaunchedEffect
         if (currentYtId.isNotEmpty() && currentYtId != lastLoadedYtId) {
@@ -431,26 +412,13 @@ fun YouTubeWatchScreen(
         }
     }
 
-    // Live position tracking for ExoPlayer (smooth UI slider & timestamps)
-    var exoCurrentPositionMs by remember { mutableStateOf(0L) }
-    var exoDurationMs by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(isYouTubeMode) {
-        if (isYouTubeMode) return@LaunchedEffect
-        while (true) {
-            exoCurrentPositionMs = exoPlayer.currentPosition
-            exoDurationMs = exoPlayer.duration.coerceAtLeast(0L)
-            delay(300)
-        }
-    }
-
     DisposableEffect(roomCode, uid) {
         if (uid.isNotEmpty()) bufferingRef.onDisconnect().removeValue()
         onDispose { bufferingRef.removeValue() }
     }
 
-    // Broadcast my own buffering state, debounced (800ms) so quick seek-loads don't flicker.
-    val isLocalBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
+    // Broadcast my own buffering state, debounced (800ms)
+    val isLocalBuffering = isYtBuffering
     LaunchedEffect(isLocalBuffering) {
         if (isLocalBuffering) {
             delay(800)
@@ -464,7 +432,7 @@ fun YouTubeWatchScreen(
         }
     }
 
-    // Watch for other participants' buffering entry
+    // Watch for other participants buffering entry
     DisposableEffect(roomCode, uid) {
         val bufferingRootRef = db.child("buffering")
         val listener = object : ValueEventListener {
@@ -478,25 +446,8 @@ fun YouTubeWatchScreen(
         onDispose { bufferingRootRef.removeEventListener(listener) }
     }
 
-    // When this device finishes buffering, smoothly catch up if drifted.
-    LaunchedEffect(localPlaybackState) {
-        if (isYouTubeMode) return@LaunchedEffect
-        if (localPlaybackState == Player.STATE_READY && isPlayingState && !isUserSeeking) {
-            val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, exoDurationMs)
-            val drift = abs(exoPlayer.currentPosition - expected)
-            if (drift in 1500L..5000L) {
-                exoPlayer.seekTo(expected)
-                showSyncNowButton = false
-            } else if (drift > 5000L) {
-                showSyncNowButton = true
-            } else {
-                showSyncNowButton = false
-            }
-        }
-    }
-
-    // Background drift monitor (checks every 3.5s, auto-catches up without micro-stutter)
-    LaunchedEffect(isPlayingState, isYouTubeMode, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
+    // Background drift monitor for YouTube (checks every 3.5s)
+    LaunchedEffect(isPlayingState, lastKnownPosition, lastUpdatedAtSnapshot, isUserSeeking) {
         if (!isPlayingState || isUserSeeking) {
             showSyncNowButton = false
             return@LaunchedEffect
@@ -504,50 +455,28 @@ fun YouTubeWatchScreen(
         while (true) {
             delay(3500)
             if (!isPlayingState || isUserSeeking) break
-            val isBuffering = if (isYouTubeMode) isYtBuffering else (localPlaybackState == Player.STATE_BUFFERING)
-            if (!isBuffering) {
-                val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
-                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
-                val current = if (isYouTubeMode) ytCurrentTimeMs else exoPlayer.currentPosition
-                val drift = abs(current - expected)
-                if (isYouTubeMode) {
-                    // For YouTube, avoid frequent micro-seeks that reset buffering chunks.
-                    // Only auto-seek if heavily drifted (> 8000ms), otherwise let it stream smoothly.
-                    if (drift > 8000L) {
-                        youtubePlayer?.seekTo(expected / 1000f)
-                        ytCurrentTimeMs = expected
-                    }
-                    showSyncNowButton = drift > 5000L
-                } else {
-                    if (drift in 1500L..5000L) {
-                        exoPlayer.seekTo(expected)
-                        showSyncNowButton = false
-                    } else if (drift > 5000L) {
-                        showSyncNowButton = true
-                    } else {
-                        showSyncNowButton = false
-                    }
+            if (!isYtBuffering) {
+                val expected = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, ytDurationMs)
+                val drift = abs(ytCurrentTimeMs - expected)
+                // For YouTube, avoid frequent micro-seeks; only auto-seek if heavily drifted (> 8000ms)
+                if (drift > 8000L) {
+                    youtubePlayer?.seekTo(expected / 1000f)
+                    ytCurrentTimeMs = expected
                 }
+                showSyncNowButton = drift > 5000L
             }
         }
     }
 
     fun syncNow() {
-        val duration = if (isYouTubeMode) ytDurationMs else exoDurationMs
-        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, duration)
-        if (isYouTubeMode) {
-            youtubePlayer?.seekTo(target / 1000f)
-            ytCurrentTimeMs = target
-        } else {
-            exoPlayer.seekTo(target)
-        }
+        val target = calculateExpectedPosition(lastKnownPosition, isPlayingState, lastUpdatedAtSnapshot, ytDurationMs)
+        youtubePlayer?.seekTo(target / 1000f)
+        ytCurrentTimeMs = target
         showSyncNowButton = false
         bumpInteraction()
     }
 
-    // ---- Network status icon: shows if EITHER person has a connection issue -
-    // my phone's actual network state (wifi/data lost or unvalidated), OR
-    // either side's video buffering. Hidden entirely when everything's fine. ----
+    // ---- Network status icon ----
     var hasNetworkIssue by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -585,10 +514,8 @@ fun YouTubeWatchScreen(
                 "lastUpdatedAt" to ServerValue.TIMESTAMP
             )
         )
-        val currentUrl = if (isYouTubeMode) "https://www.youtube.com/watch?v=$currentYtId"
-            else exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
-        if (currentUrl != null) {
-            recordContinueWatching(usersRef, uid, roomCode, currentUrl, positionMs, isYouTube = isYouTubeMode)
+        if (currentYtId.isNotEmpty()) {
+            recordContinueWatching(usersRef, uid, roomCode, "https://www.youtube.com/watch?v=$currentYtId", positionMs, isYouTube = true)
         }
     }
 
@@ -627,12 +554,11 @@ fun YouTubeWatchScreen(
                 roomIsPlaying = isPlaying
                 isPlayingState = isPlaying
 
-                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, if (isYouTubeMode) ytDurationMs else exoDurationMs)
+                val targetPosition = calculateExpectedPosition(position, isPlaying, lastUpdatedAt, ytDurationMs)
 
                 isApplyingRemoteState = true
                 val ytId = getYoutubeVideoId(videoUrl)
                 if (ytId != null) {
-                    isYouTubeMode = true
                     if (currentYtId != ytId) {
                         currentYtId = ytId
                         ytCurrentTimeMs = targetPosition
@@ -655,24 +581,6 @@ fun YouTubeWatchScreen(
                         }
                     }
                     prevRemoteUpdatedAt = lastUpdatedAt
-                } else if (videoUrl.isNotEmpty()) {
-                    isYouTubeMode = false
-                    val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
-                    if (currentMediaUri != videoUrl) {
-                        currentVideoUrl.set(videoUrl)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(videoUrl))
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = isPlaying
-                        if (targetPosition > 0L) exoPlayer.seekTo(targetPosition)
-                    } else if (!isSelfEcho) {
-                        if (exoPlayer.playWhenReady != isPlaying) {
-                            exoPlayer.playWhenReady = isPlaying
-                        }
-                        val drift = abs(exoPlayer.currentPosition - targetPosition)
-                        if (drift > 1500L && !isUserSeeking) {
-                            exoPlayer.seekTo(targetPosition)
-                        }
-                    }
                 }
                 isApplyingRemoteState = false
             }
@@ -680,38 +588,6 @@ fun YouTubeWatchScreen(
         }
         db.addValueEventListener(listener)
         onDispose { db.removeEventListener(listener) }
-    }
-
-    DisposableEffect(exoPlayer, lifecycleOwner) {
-        val playerListener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) {
-                    isPlayingState = true
-                } else if (!roomIsPlaying) {
-                    isPlayingState = false
-                }
-            }
-            override fun onPlaybackStateChanged(state: Int) {
-                localPlaybackState = state
-                if (state == Player.STATE_READY) {
-                    if (roomIsPlaying && !exoPlayer.playWhenReady) {
-                        exoPlayer.playWhenReady = true
-                    }
-                    if (roomIsPlaying) {
-                        isPlayingState = true
-                    }
-                } else if (state == Player.STATE_ENDED && canControl) {
-                    isPlayingState = false
-                    roomIsPlaying = false
-                    pushPlaybackUpdate(false, exoPlayer.duration.coerceAtLeast(0L))
-                }
-            }
-        }
-        exoPlayer.addListener(playerListener)
-        onDispose {
-            exoPlayer.removeListener(playerListener)
-            exoPlayer.release()
-        }
     }
 
     fun applyOrientation(landscape: Boolean) {
@@ -939,20 +815,12 @@ fun YouTubeWatchScreen(
     fun skip(deltaMs: Long) {
         if (!canControl) return
         val willPlay = isPlayingState || roomIsPlaying
-        if (isYouTubeMode) {
-            val ceiling = if (ytDurationMs > 0) ytDurationMs else Long.MAX_VALUE
-            val newPos = (ytCurrentTimeMs + deltaMs).coerceIn(0L, ceiling)
-            youtubePlayer?.seekTo(newPos / 1000f)
-            ytCurrentTimeMs = newPos
-            if (willPlay) youtubePlayer?.play()
-            pushPlaybackUpdate(willPlay, newPos)
-        } else {
-            val ceiling = exoPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-            val newPos = (exoPlayer.currentPosition + deltaMs).coerceIn(0L, ceiling)
-            exoPlayer.seekTo(newPos)
-            if (willPlay) exoPlayer.playWhenReady = true
-            pushPlaybackUpdate(willPlay, newPos)
-        }
+        val ceiling = if (ytDurationMs > 0) ytDurationMs else Long.MAX_VALUE
+        val newPos = (ytCurrentTimeMs + deltaMs).coerceIn(0L, ceiling)
+        youtubePlayer?.seekTo(newPos / 1000f)
+        ytCurrentTimeMs = newPos
+        if (willPlay) youtubePlayer?.play()
+        pushPlaybackUpdate(willPlay, newPos)
         bumpInteraction()
     }
 
@@ -980,23 +848,66 @@ fun YouTubeWatchScreen(
                         },
                         onDoubleTap = { offset ->
                             if (!canControl) return@detectTapGestures
-                            val third = size.width / 3
-                            when {
-                                offset.x < third -> {
-                                    skip(-10000L)
-                                    seekFlash = "left" to System.nanoTime()
+                            val isLeft = offset.x < (size.width / 2f)
+                            if (isLeft) {
+                                skip(-10000L)
+                                seekFlashSide = "left"
+                                seekFlashTimestamp = System.currentTimeMillis()
+                            } else {
+                                skip(10000L)
+                                seekFlashSide = "right"
+                                seekFlashTimestamp = System.currentTimeMillis()
+                            }
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            isLeftDrag = offset.x < (size.width / 2f)
+                            isRightDrag = !isLeftDrag
+                            hudDismissJob?.cancel()
+                        },
+                        onDragEnd = {
+                            hudDismissJob = coroutineScope.launch {
+                                delay(1200)
+                                brightnessLevel = null
+                                volumeLevel = null
+                            }
+                        },
+                        onDragCancel = {
+                            brightnessLevel = null
+                            volumeLevel = null
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val delta = -dragAmount / 450f
+                            if (isLeftDrag) {
+                                val currentAttr = activity?.window?.attributes?.screenBrightness ?: 0.5f
+                                val base = if (currentAttr < 0f) 0.5f else currentAttr
+                                val newBrightness = (base + delta).coerceIn(0.02f, 1f)
+                                activity?.window?.let { win ->
+                                    val lp = win.attributes
+                                    lp.screenBrightness = newBrightness
+                                    win.attributes = lp
                                 }
-                                offset.x > size.width - third -> {
-                                    skip(10000L)
-                                    seekFlash = "right" to System.nanoTime()
+                                brightnessLevel = newBrightness
+                            } else if (isRightDrag) {
+                                val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                val volDelta = (-dragAmount / 35f).toInt()
+                                if (volDelta != 0) {
+                                    val newVol = (currentVol + volDelta).coerceIn(0, maxVol)
+                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+                                    volumeLevel = newVol.toFloat() / maxVol.toFloat()
+                                } else {
+                                    volumeLevel = currentVol.toFloat() / maxVol.toFloat()
                                 }
-                                else -> bumpInteraction()
                             }
                         }
                     )
                 }
         ) {
-            if (isYouTubeMode) {
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1375,23 +1286,25 @@ fun YouTubeWatchScreen(
                         )
                     }
                 }
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false
-                        }
-                    },
-                    onRelease = { playerView ->
-                        playerView.player = null
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            // Centered Rotating Nuclear Radiation Hazard Buffering Indicator
+            PlayerBufferingOverlay(
+                isBuffering = isYtBuffering,
+                statusText = "BUFFERING YOUTUBE STREAM..."
+            )
+
+            // Double-Tap 10s Seek Ripple Wave Overlay
+            DoubleTapSeekRippleOverlay(
+                side = seekFlashSide,
+                timestamp = seekFlashTimestamp
+            )
+
+            // Vertical Swipe Brightness & Volume HUD
+            PlayerVolumeBrightnessHUD(
+                brightnessLevel = brightnessLevel,
+                volumeLevel = volumeLevel
+            )
 
             // Quality badge & settings button on video. Click to open Quality Control Menu!
-            if (isYouTubeMode) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -1418,7 +1331,6 @@ fun YouTubeWatchScreen(
                         )
                     }
                 }
-            }
 
             // Floating emoji reactions
             floatingReactions.forEach { reaction ->
@@ -1426,24 +1338,6 @@ fun YouTubeWatchScreen(
                     YtFloatingEmoji(reaction) {
                         floatingReactions.remove(reaction)
                     }
-                }
-            }
-
-            // Double-tap-to-seek flash ("<<10" / "10>>") on whichever side was tapped
-            seekFlash?.let { (side, _) ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.35f)
-                        .align(if (side == "left") Alignment.CenterStart else Alignment.CenterEnd)
-                        .background(Color.Black.copy(alpha = 0.25f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (side == "left") "\u25c0\u25c0 10" else "10 \u25b6\u25b6",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium
-                    )
                 }
             }
 
@@ -1466,28 +1360,30 @@ fun YouTubeWatchScreen(
                 }
             }
 
-            // Persistent "friend is buffering" banner - stays up the whole time,
-            // not a quick toast, and isn't tied to the controls auto-hide timer.
+            // Persistent "friend is buffering" banner with rotating nuclear hazard indicator
             othersBuffering?.let { name ->
                 Surface(
-                    color = Color.Black.copy(alpha = 0.75f),
-                    shape = MaterialTheme.shapes.medium,
+                    color = Color(0xDD0D1322),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, NeonCyberCyan.copy(alpha = 0.6f)),
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White
+                        NuclearRadiationBufferingIndicator(
+                            size = 18.dp,
+                            color = NeonCyberCyan,
+                            glowColor = NeonToxicGreen
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "$name's connection is buffering — paused",
                             color = Color.White,
-                            style = MaterialTheme.typography.labelMedium
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }

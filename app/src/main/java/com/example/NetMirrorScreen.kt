@@ -59,6 +59,7 @@ import com.example.ui.theme.VioletGlow
 import com.example.ui.theme.VoidBlack
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -77,15 +78,39 @@ private val BLOCKED_DOMAINS = listOf(
     "amazon-adsystem.com", "scorecardresearch.com", "outbrain.com",
     "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
     "rubiconproject.com", "moatads.com", "exoclick.com", "popads.net",
-    "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
-    "trafficjunky.com", "popcash.net", "adspyglass.com"
+    "popcash.net", "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
+    "trafficjunky.com", "adspyglass.com", "monetag.com", "admaven.com",
+    "hilltopads.com", "evadav.com", "rollerads.com", "galaksion.com",
+    "coinhive.com", "clksite.com", "bidswitch.net", "casalemedia.com",
+    "zergnet.com", "mgid.com", "infolinks.com", "trafficfactory.biz",
+    "ad-delivery.net", "adform.net", "popunder"
 )
 
-// Real video/playlist files only. ".ts" segments and generic "video" URLs are NOT matched.
-private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|$)""", RegexOption.IGNORE_CASE)
+// Real video/playlist files only.
+private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd|webm)(\?|#|$)""", RegexOption.IGNORE_CASE)
 
-private fun isVideoUrl(url: String): Boolean =
-    url.startsWith("http", ignoreCase = true) && VIDEO_URL_REGEX.containsMatchIn(url)
+private fun isVideoUrl(url: String): Boolean {
+    if (!url.startsWith("http", ignoreCase = true)) return false
+    if (VIDEO_URL_REGEX.containsMatchIn(url)) return true
+    val lower = url.lowercase()
+    if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mpd")) return true
+    if ((lower.contains("proxy22.shop") || lower.contains("hakunaymatata.com") || lower.contains("watch21.shop") || lower.contains("watch22.shop")) &&
+        (lower.contains("stream") || lower.contains("watchbox") || lower.contains("play") || lower.contains("video"))) {
+        return true
+    }
+    return false
+}
+
+private val TRAILER_KEYWORDS = listOf(
+    "trailer", "preview", "teaser", "sample",
+    "googlevideo.com", "youtube.com", "youtu.be", "ytimg.com"
+)
+
+private fun isTrailerUrl(url: String): Boolean {
+    if (url.isBlank()) return false
+    val lower = url.lowercase()
+    return TRAILER_KEYWORDS.any { lower.contains(it) }
+}
 
 /** One captured video link. [resolution] is e.g. "480p", or null while unknown. */
 private data class CapturedLink(val key: String, val url: String, val resolution: String?)
@@ -107,6 +132,61 @@ private fun resolutionLabel(width: Int, height: Int): String? {
     return "${closest}p"
 }
 
+/** Extracts video resolution like "1080p", "720p" directly from URL segments or query params. */
+private fun extractResolutionFromUrl(url: String): String? {
+    val clean = url.substringBefore('?')
+    val match = Regex("""(?i)(?:^|[\W_])(2160|1440|1080|720|480|360|240)p?(?:[\W_]|$)""").find(clean)
+    if (match != null) {
+        val num = match.groupValues[1]
+        val pos = match.range.first
+        if (pos <= 0 || clean[pos] != ':') {
+            return "${num}p"
+        }
+    }
+    val query = url.substringAfter('?', "")
+    if (query.isNotEmpty()) {
+        val qMatch = Regex("""(?i)(?:q|quality|res|resolution)=(2160|1440|1080|720|480|360|240)p?""").find(query)
+        if (qMatch != null) return "${qMatch.groupValues[1]}p"
+    }
+    if (Regex("""(?i)(?:^|[\W_])(4k|uhd)(?:[\W_]|$)""").containsMatchIn(clean)) return "2160p"
+    return null
+}
+
+private fun parseMasterPlaylistVariants(masterUrl: String, content: String): List<Pair<String, String>> {
+    val variants = mutableListOf<Pair<String, String>>()
+    val lines = content.lines()
+    var currentRes: String? = null
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
+            val resMatch = Regex("""RESOLUTION=(\d+)x(\d+)""", RegexOption.IGNORE_CASE).find(trimmed)
+            if (resMatch != null) {
+                val w = resMatch.groupValues[1].toIntOrNull() ?: 0
+                val h = resMatch.groupValues[2].toIntOrNull() ?: 0
+                currentRes = resolutionLabel(w, h)
+            }
+        } else if (!trimmed.startsWith("#") && trimmed.isNotEmpty() && currentRes != null) {
+            val variantUrl = resolveRelativeUrl(masterUrl, trimmed)
+            variants.add(variantUrl to currentRes)
+            currentRes = null
+        }
+    }
+    return variants
+}
+
+private fun resolveRelativeUrl(baseUrl: String, relative: String): String {
+    return try {
+        URI(baseUrl).resolve(relative).toString()
+    } catch (e: Exception) {
+        if (relative.startsWith("http://") || relative.startsWith("https://")) {
+            relative
+        } else {
+            val prefix = baseUrl.substringBeforeLast('/')
+            "$prefix/$relative"
+        }
+    }
+}
+
 /**
  * Port of the extension's content.js: when the page sends NETMIRROR_CHECK,
  * answer that the extension is installed. Injected at document start.
@@ -115,12 +195,118 @@ private const val DETECT_SCRIPT = """
 (function () {
   if (window.__nmDetect) return;
   window.__nmDetect = true;
+
+  // 1. Lock llvpnLoaded to true permanently so Private DNS / AdBlock cannot trigger anti-adblock
+  try {
+    Object.defineProperty(window, 'llvpnLoaded', {
+      get: function () { return true; },
+      set: function () { /* locked to true */ },
+      configurable: false
+    });
+  } catch (err) {
+    window.llvpnLoaded = true;
+  }
+  window.canRunAds = true;
+  window.isAdBlockActive = false;
+  window.adblock = false;
+  window.google_ad_client = "ca-pub-123456789";
+  window.adsbygoogle = { push: function () {} };
+
+  // 2. NetMirror extension detector reply (matches official extension 3.20.9)
+  function replyExtension() {
+    try {
+      window.postMessage({
+        type: 'NETMIRROR_EXTENSION_DETECTED',
+        source: 'netmirror-extension',
+        installed: true,
+        version: '3.20.9'
+      }, '*');
+    } catch (e) {}
+  }
+
   window.addEventListener('message', function (e) {
-    if (e.source !== window) return;
-    if (e.data && e.data.type === 'NETMIRROR_CHECK') {
-      window.postMessage({ type: 'NETMIRROR_EXTENSION_DETECTED', installed: true }, '*');
+    if (e.data && (e.data.type === 'NETMIRROR_CHECK' || e.data.type === 'CHECK_EXTENSION')) {
+      replyExtension();
     }
   });
+
+  // Announce extension repeatedly so React component immediately detects it
+  replyExtension();
+  setTimeout(replyExtension, 50);
+  setTimeout(replyExtension, 150);
+  setTimeout(replyExtension, 400);
+  setTimeout(replyExtension, 800);
+  setTimeout(replyExtension, 1500);
+  setInterval(replyExtension, 500);
+
+  // 3. Inject instant CSS shield to vanish any adblock or unsupported browser modal
+  try {
+    var style = document.createElement('style');
+    style.id = 'uranium-adshield-css';
+    style.textContent = [
+      '.adblock-container, .adblock-card, .adblock-icon, .adblock-steps,',
+      'div[class*="adblock"], div[class*="AdBlock"],',
+      'div[style*="z-index: 2147483647"]:not(:has(video)):not(:has(iframe)),',
+      'html.disable-popunder-overlay div[style*="z-index: 2147483647"] > div {',
+      '  display: none !important;',
+      '  opacity: 0 !important;',
+      '  visibility: hidden !important;',
+      '  pointer-events: none !important;',
+      '  height: 0 !important;',
+      '  max-height: 0 !important;',
+      '}'
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(style);
+  } catch (e) {}
+
+  window.__nmIsTrailerVideo = function (v) {
+    if (!v) return false;
+    if (v.__nmIsTrailer) return true;
+    var src = (v.currentSrc || v.src || '').toLowerCase();
+    if (/(trailer|preview|teaser|sample|googlevideo|youtube\.com|youtu\.be)/i.test(src)) {
+      v.__nmIsTrailer = true;
+      return true;
+    }
+    var sources = v.querySelectorAll ? v.querySelectorAll('source') : [];
+    for (var i = 0; i < sources.length; i++) {
+      var s = (sources[i].src || '').toLowerCase();
+      if (/(trailer|preview|teaser|sample|googlevideo|youtube\.com|youtu\.be)/i.test(s)) {
+        v.__nmIsTrailer = true;
+        return true;
+      }
+    }
+    if (v.closest && v.closest('.trailer, [id*="trailer" i], [class*="trailer" i]')) {
+      v.__nmIsTrailer = true;
+      return true;
+    }
+    var cur = v.parentElement;
+    for (var j = 0; j < 6 && cur && cur !== document.body; j++) {
+      var text = (cur.innerText || '').toLowerCase();
+      if (text.indexOf('trailer:') >= 0 || text.indexOf('trailer :') >= 0 || /^\s*trailer\b/i.test(text)) {
+        v.__nmIsTrailer = true;
+        return true;
+      }
+      if (cur.className && typeof cur.className === 'string' && /trailer|preview/i.test(cur.className)) {
+        v.__nmIsTrailer = true;
+        return true;
+      }
+      cur = cur.parentElement;
+    }
+    if (v.loop && v.muted && v.duration > 0 && v.duration < 360) {
+      v.__nmIsTrailer = true;
+      return true;
+    }
+    return false;
+  };
+
+  window.__nmRegisterTrailer = function (u) {
+    if (!u || typeof u !== 'string') return;
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.onTrailerDetected) {
+        window.AndroidBridge.onTrailerDetected(u);
+      }
+    } catch (e) {}
+  };
 })();
 """
 
@@ -281,6 +467,7 @@ private const val LIMIT_SCRIPT = """
     try { blocked = bridge.isBlocked(); } catch (e) {}
     var playing = false;
     document.querySelectorAll('video').forEach(function (v) {
+      if (window.__nmIsTrailerVideo && window.__nmIsTrailerVideo(v)) return;
       attach(v);
       if (blocked) { if (!v.paused) v.pause(); return; }
       if (v.duration > 60 && !v.paused && !v.ended && !v.seeking && v.readyState > 2) playing = true;
@@ -290,12 +477,52 @@ private const val LIMIT_SCRIPT = """
 })();
 """
 
-// Everything that must run as early as possible on every page.
-private const val START_SCRIPT = DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + LIMIT_SCRIPT
+/**
+ * Scans for trailer preview videos, mutes/pauses them, and registers their URLs with the Android bridge
+ * so they are never captured as movie links.
+ */
+private const val TRAILER_SCRIPT = """
+(function () {
+  if (window.__nmTrailerScan) return;
+  window.__nmTrailerScan = true;
 
-// Page helper: hides "extension not enabled" warnings, unlocks download buttons, and reports
-// the video that is loaded in the player together with its real size (width x height).
-// Throttled so it does not slow the site down.
+  function scanForTrailers() {
+    var fn = window.__nmIsTrailerVideo;
+    var reg = window.__nmRegisterTrailer;
+    if (!fn || !reg) return;
+
+    document.querySelectorAll('video').forEach(function (v) {
+      if (fn(v)) {
+        v.__nmIsTrailer = true;
+        try { v.pause(); v.muted = true; } catch (e) {}
+        if (v.currentSrc) reg(v.currentSrc);
+        if (v.src) reg(v.src);
+        v.querySelectorAll('source').forEach(function (s) {
+          if (s.src) reg(s.src);
+        });
+      }
+    });
+
+    document.querySelectorAll('.info-section, .content').forEach(function (el) {
+      var text = (el.innerText || '').toLowerCase();
+      if (text.indexOf('trailer:') >= 0) {
+        el.querySelectorAll('video, source').forEach(function (media) {
+          var u = media.src || media.currentSrc;
+          if (u) reg(u);
+        });
+      }
+    });
+  }
+
+  setInterval(scanForTrailers, 1000);
+  document.addEventListener('DOMContentLoaded', scanForTrailers);
+  window.addEventListener('load', scanForTrailers);
+  scanForTrailers();
+})();
+"""
+
+// Page helper: hides "extension not enabled" warnings, unlocks download buttons, reports
+// the video that is loaded in the player with real size (width x height), and hooks quality buttons.
 private const val PAGE_SCRIPT = """
 (function () {
   if (window.__nmPage) return;
@@ -304,36 +531,67 @@ private const val PAGE_SCRIPT = """
   var last = '';
 
   function reportVideo(v) {
-    var src = v.currentSrc || v.src;
-    if (!src || !VIDEO_RE.test(src)) return;
+    var fn = window.__nmIsTrailerVideo;
+    if (fn && fn(v)) return;
+    var src = v.currentSrc || v.src || '';
     var w = v.videoWidth || 0;
     var h = v.videoHeight || 0;
     if (h === 0) return; // metadata not loaded yet
     var sig = src + '|' + w + 'x' + h;
-    if (sig === last) return; // only report when the video or its quality changes
+    if (sig === last) return;
     last = sig;
     try { window.AndroidBridge.onVideoPlaying(src, w, h); } catch (e) {}
   }
 
   function scanVideos() {
     document.querySelectorAll('video').forEach(function (v) {
+      var fn = window.__nmIsTrailerVideo;
+      if (fn && fn(v)) {
+        try { v.pause(); v.muted = true; } catch (e) {}
+        var reg = window.__nmRegisterTrailer;
+        if (reg) {
+          if (v.currentSrc) reg(v.currentSrc);
+          if (v.src) reg(v.src);
+        }
+        return;
+      }
       reportVideo(v);
       if (!v.__nm) {
         v.__nm = true;
-        ['loadedmetadata', 'resize', 'playing'].forEach(function (ev) {
+        ['loadedmetadata', 'resize', 'playing', 'canplay', 'timeupdate'].forEach(function (ev) {
           v.addEventListener(ev, function () { reportVideo(v); });
         });
       }
     });
   }
 
+  document.addEventListener('click', function (e) {
+    var target = e.target;
+    if (!target) return;
+    var el = target.closest('li, button, div, span, a');
+    if (!el) return;
+    var text = (el.innerText || el.textContent || '').trim();
+    var match = text.match(/\b(2160p|1440p|1080p|720p|480p|360p|240p|4k|1080|720|480|360)\b/i);
+    if (match) {
+      var raw = match[1].toLowerCase();
+      var label = raw.endsWith('p') ? raw : (raw === '4k' ? '2160p' : raw + 'p');
+      try { window.AndroidBridge.onQualitySelected(label); } catch (err) {}
+    }
+  }, true);
+
   function hideWarnings() {
+    var blockers = document.querySelectorAll('.adblock-container, .adblock-card, div[class*="adblock"], div[class*="AdBlock"]');
+    blockers.forEach(function (el) {
+      try { el.remove(); } catch (e) { el.style.display = 'none'; }
+    });
+
     var keywords = ['extension not enable', 'extension not enabled', 'adblocker detected',
-      'ad blocker detected', 'disable your adblock', 'extension required'];
+      'ad blocker detected', 'disable your adblock', 'extension required', 'private dns', 'browser not supported'];
     document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(function (el) {
       var t = (el.innerText || '').toLowerCase();
-      if (t.length > 0 && t.length < 80 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
-        el.style.display = 'none';
+      if (t.length > 0 && t.length < 120 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
+        var box = el.closest('.adblock-container, .adblock-card, div') || el;
+        try { box.remove(); } catch (e) { box.style.display = 'none'; }
       }
     });
   }
@@ -367,10 +625,13 @@ private const val PAGE_SCRIPT = """
   setTimeout(cleanup, 1000);
   setTimeout(cleanup, 3000);
   setTimeout(cleanup, 6000);
-  setInterval(scanVideos, 1000); // cheap: only looks at <video> elements
+  setInterval(scanVideos, 1000);
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
 })();
 """
+
+// Everything that must run as early as possible on every page, including child player iframes.
+private const val START_SCRIPT = DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + TRAILER_SCRIPT + LIMIT_SCRIPT + PAGE_SCRIPT
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -393,11 +654,44 @@ fun NetMirrorScreen(
     var customView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    // Pages the WebView is allowed to navigate to (NetMirror + Cloudflare challenges + the sites in the referer rules).
+    // Pages the WebView is allowed to navigate to (NetMirror + Cloudflare challenges + streaming player hosts).
     val allowedHostHints = remember {
-        listOf("netmirror", "cloudflare", "challenges", "turnstile", "recaptcha", "hcaptcha") +
+        listOf(
+            "netmirror", "cloudflare", "challenges", "turnstile", "recaptcha", "hcaptcha",
+            "watch21", "watch22", "proxy22", "mzfi", "hakunaymatata", "moviebox"
+        ) +
             AppConfig.REFERER_RULES.keys +
             AppConfig.REFERER_RULES.values.mapNotNull { runCatching { Uri.parse(it).host }.getOrNull() }
+    }
+
+    val trailerKeys = remember { mutableSetOf<String>() }
+    val trailerUrls = remember { mutableSetOf<String>() }
+
+    fun isTrailer(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lower = url.lowercase()
+        if (isTrailerUrl(lower)) return true
+        if (trailerUrls.any { it.isNotEmpty() && (lower.contains(it) || it.contains(lower)) }) return true
+        if (trailerKeys.contains(linkKey(url))) return true
+        return false
+    }
+
+    fun onTrailerDetectedFound(url: String) {
+        if (url.isBlank()) return
+        val key = linkKey(url)
+        trailerKeys.add(key)
+        val lower = url.lowercase()
+        trailerUrls.add(lower)
+        val base = lower.substringBefore('?').substringBefore('#')
+        if (base.isNotEmpty()) trailerUrls.add(base)
+
+        // Purge any trailer links from capturedLinks
+        capturedLinks = capturedLinks.filter {
+            it.key != key && !it.url.contains(key, ignoreCase = true) && !isTrailer(it.url)
+        }
+        if (selectedKey == key || capturedLinks.none { it.key == selectedKey }) {
+            selectedKey = capturedLinks.firstOrNull()?.key
+        }
     }
 
     fun isAllowedNavigation(url: String): Boolean {
@@ -409,9 +703,10 @@ fun NetMirrorScreen(
 
     // Adds a link, or updates it if the same file is already in the list.
     fun upsertLink(url: String, resolution: String?, select: Boolean) {
+        if (isTrailer(url)) return
         val key = linkKey(url)
         val existing = capturedLinks.firstOrNull { it.key == key }
-        val newResolution = resolution ?: existing?.resolution
+        val newResolution = resolution ?: existing?.resolution ?: extractResolutionFromUrl(url)
         // Skip no-op updates (the network sends many range requests for the same file).
         if (existing != null && existing.url == url && existing.resolution == newResolution &&
             !(select && selectedKey != key)
@@ -427,16 +722,44 @@ fun NetMirrorScreen(
         if (wasEmpty) Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
     }
 
-    // From the network: link found, resolution not known yet.
+    // From the network: link found, resolution not known yet or inferred from URL.
     fun addCapturedLink(url: String) {
-        if (!isVideoUrl(url)) return
-        upsertLink(url, null, select = false)
+        if (!isVideoUrl(url) || isTrailer(url)) return
+        val inferredRes = extractResolutionFromUrl(url)
+        upsertLink(url, inferredRes, select = (inferredRes != null || capturedLinks.isEmpty()))
     }
 
     // From the page: this is the video the player is playing right now, with its real size.
     fun onVideoPlayingFound(url: String, width: Int, height: Int) {
-        if (!isVideoUrl(url)) return // the JS bridge is reachable by any frame - validate here
-        upsertLink(url, resolutionLabel(width, height), select = true)
+        if (isTrailer(url)) return
+        val res = resolutionLabel(width, height) ?: return
+        if (url.startsWith("http", ignoreCase = true) && !url.startsWith("blob:", ignoreCase = true) && isVideoUrl(url)) {
+            upsertLink(url, res, select = true)
+        } else {
+            // Blob / MSE video playing: update resolution on active movie link
+            val currentSelected = capturedLinks.firstOrNull { it.key == selectedKey }
+            val target = currentSelected ?: capturedLinks.firstOrNull { !isTrailer(it.url) }
+            if (target != null) {
+                upsertLink(target.url, res, select = true)
+            }
+        }
+    }
+
+    // When the user clicks a quality button or option in the web player UI
+    fun onUserSelectedQuality(quality: String) {
+        val norm = if (quality.endsWith("p", ignoreCase = true)) quality.lowercase() else "${quality}p"
+        val match = capturedLinks.firstOrNull { it.resolution.equals(norm, ignoreCase = true) }
+        if (match != null) {
+            selectedKey = match.key
+            Toast.makeText(context, "Selected $norm", Toast.LENGTH_SHORT).show()
+        } else {
+            val currentSelected = capturedLinks.firstOrNull { it.key == selectedKey }
+            val target = currentSelected ?: capturedLinks.firstOrNull { !isTrailer(it.url) }
+            if (target != null) {
+                upsertLink(target.url, norm, select = true)
+                Toast.makeText(context, "Quality set to $norm", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     val selected = capturedLinks.firstOrNull { it.key == selectedKey }
@@ -658,6 +981,16 @@ fun NetMirrorScreen(
                         }
 
                         @JavascriptInterface
+                        fun onTrailerDetected(url: String) {
+                            post { onTrailerDetectedFound(url) }
+                        }
+
+                        @JavascriptInterface
+                        fun onQualitySelected(quality: String) {
+                            post { onUserSelectedQuality(quality) }
+                        }
+
+                        @JavascriptInterface
                         fun onWebPlayTick() {
                             post { onPlayTick() }
                         }
@@ -789,36 +1122,67 @@ fun NetMirrorScreen(
                         }
 
                         // One interceptor, three steps in order:
-                        // 1) block ads  2) capture video links  3) add extension headers
+                        // 1) spoof anti-adblock detector  2) block ads & trackers  3) capture video links  4) parse m3u8 playlists
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
                         ): WebResourceResponse? {
                             if (request == null) return null
                             val url = request.url.toString()
+                            val lowerUrl = url.lowercase()
 
-                            // 1) Block ads
-                            if (BLOCKED_DOMAINS.any { url.contains(it, ignoreCase = true) }) {
+                            // 1) Spoof anti-adblock detector scripts (e.g. llvpn, tag.min.js) with 200 OK JS
+                            if (lowerUrl.contains("llvpn.com") || lowerUrl.contains("tag.min.js")) {
+                                val js = "window.llvpnLoaded = true; console.log('[DNS Shield] llvpn verified');"
                                 return WebResourceResponse(
-                                    "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                                    "application/javascript",
+                                    "utf-8",
+                                    ByteArrayInputStream(js.toByteArray(Charsets.UTF_8))
                                 )
                             }
 
-                            // 2) Capture video links seen on the network
-                            if (isVideoUrl(url)) {
+                            // 2) Powerful DNS AdBlocker: neutralize ad networks, pop-unders, trackers with empty 200 OK
+                            if (BLOCKED_DOMAINS.any { lowerUrl.contains(it) }) {
+                                val isJs = lowerUrl.contains(".js")
+                                val mime = if (isJs) "application/javascript" else "text/plain"
+                                val content = if (isJs) "/* DNS shield blocked ad script */" else ""
+                                return WebResourceResponse(
+                                    mime,
+                                    "utf-8",
+                                    ByteArrayInputStream(content.toByteArray(Charsets.UTF_8))
+                                )
+                            }
+
+                            // 3) Capture video links seen on the network (never trailers)
+                            if (isVideoUrl(url) && !isTrailer(url)) {
                                 view?.post { addCapturedLink(url) }
                             }
 
-                            // 3) Referer rules + custom headers (GET only)
-                            if (!request.method.equals("GET", ignoreCase = true)) return null
-                            if (!url.startsWith("http")) return null
-                            val extra = AppConfig.resolveVideoHeaders(url)
-                            if (extra.isEmpty()) return null
-                            return try {
-                                fetchWithHeaders(url, request.requestHeaders, extra)
-                            } catch (e: Exception) {
-                                null // fall back to a normal WebView load
+                            // 4) Referer rules + custom headers ONLY for .m3u8 playlists (parse variants without buffering huge video chunks)
+                            if (request.method.equals("GET", ignoreCase = true) &&
+                                url.startsWith("http", ignoreCase = true) &&
+                                lowerUrl.contains(".m3u8") &&
+                                !lowerUrl.contains(".ts")
+                            ) {
+                                val extra = AppConfig.resolveVideoHeaders(url)
+                                if (extra.isNotEmpty()) {
+                                    return try {
+                                        fetchWithHeaders(url, request.requestHeaders, extra) { variants ->
+                                            view?.post {
+                                                variants.forEach { (vUrl, vRes) ->
+                                                    if (!isTrailer(vUrl)) {
+                                                        upsertLink(vUrl, vRes, select = false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        null // fall back to normal WebView load
+                                    }
+                                }
                             }
+
+                            return null
                         }
                     }
 
@@ -979,7 +1343,8 @@ private fun WatchInAppDialog(
 private fun fetchWithHeaders(
     url: String,
     pageHeaders: Map<String, String>,
-    extra: Map<String, String>
+    extra: Map<String, String>,
+    onMasterPlaylistParsed: ((List<Pair<String, String>>) -> Unit)? = null
 ): WebResourceResponse {
     val conn = URL(url).openConnection() as HttpURLConnection
     conn.instanceFollowRedirects = true
@@ -996,7 +1361,19 @@ private fun fetchWithHeaders(
     }
 
     val code = conn.responseCode
-    val stream = if (code >= 400) conn.errorStream else conn.inputStream
+    val rawStream = if (code >= 400) conn.errorStream else conn.inputStream
+    val bytes = rawStream?.use { it.readBytes() } ?: ByteArray(0)
+
+    if (code in 200..299 && url.contains(".m3u8", ignoreCase = true)) {
+        val text = runCatching { String(bytes, Charsets.UTF_8) }.getOrNull()
+        if (text != null && text.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
+            val variants = parseMasterPlaylistVariants(url, text)
+            if (variants.isNotEmpty()) {
+                onMasterPlaylistParsed?.invoke(variants)
+            }
+        }
+    }
+
     val contentType = conn.contentType ?: "application/octet-stream"
     val mime = contentType.substringBefore(';').trim()
     val encoding = if (contentType.contains("charset=", ignoreCase = true))
@@ -1010,6 +1387,6 @@ private fun fetchWithHeaders(
     headers["Access-Control-Allow-Origin"] = "*"
 
     return WebResourceResponse(
-        mime, encoding, code, conn.responseMessage?.ifBlank { null } ?: "OK", headers, stream
+        mime, encoding, code, conn.responseMessage?.ifBlank { null } ?: "OK", headers, ByteArrayInputStream(bytes)
     )
 }
