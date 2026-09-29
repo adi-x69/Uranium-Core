@@ -15,13 +15,13 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -59,7 +59,6 @@ import com.example.ui.theme.VioletGlow
 import com.example.ui.theme.VoidBlack
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
-import java.net.URI
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -72,152 +71,126 @@ private const val WEB_MAX_SEEKS = 5
 
 private enum class WebLimitReason { TIME, SEEKS }
 
-private val BLOCKED_DOMAINS = listOf(
-    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-    "pagead2.googlesyndication", "adservice.google", "adnxs.com",
-    "amazon-adsystem.com", "scorecardresearch.com", "outbrain.com",
-    "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
-    "rubiconproject.com", "moatads.com", "exoclick.com", "popads.net",
-    "popcash.net", "propellerads.com", "adsterra.com", "clickadu.com", "juicyads.com",
-    "trafficjunky.com", "adspyglass.com", "monetag.com", "admaven.com",
-    "hilltopads.com", "evadav.com", "rollerads.com", "galaksion.com",
-    "coinhive.com", "clksite.com", "bidswitch.net", "casalemedia.com",
-    "zergnet.com", "mgid.com", "infolinks.com", "trafficfactory.biz",
-    "ad-delivery.net", "adform.net", "popunder"
+// Powerful AdBlocker domain list covering streaming ad networks, popunders, analytics and trackers.
+private val AD_DOMAINS = setOf(
+    "llvpn.com", "popads.net", "popcash.net", "propellerads.com", "propellerclick.com",
+    "propu.sh", "adsterra.com", "clickadu.com", "exoclick.com", "juicyads.com",
+    "trafficjunky.com", "adspyglass.com", "ad-maven.com", "admaven.com", "hilltopads.com",
+    "monetag.com", "infolinks.com", "adcash.com", "yllix.com", "yllixpro.com",
+    "bidvertiser.com", "highcpmgate.com", "deloton.com", "alwingulla.com",
+    "brightadnetwork.com", "onclickperformance.com", "onclickalgo.com", "go.ad2upapp.com",
+    "adstarget.com", "adsupply.com", "realsrv.com", "tsyndicate.com", "trafficfactory.biz",
+    "ero-advertising.com", "dtiserv2.com", "adtng.com", "coin-hive.com", "coinhive.com",
+    "histats.com", "mgid.com", "revcontent.com", "zergnet.com", "doubleclick.net",
+    "googlesyndication.com", "googleadservices.com", "pagead2.googlesyndication",
+    "adservice.google", "adnxs.com", "amazon-adsystem.com", "scorecardresearch.com",
+    "outbrain.com", "taboola.com", "criteo.com", "pubmatic.com", "openx.net",
+    "rubiconproject.com", "moatads.com", "casalemedia.com", "smartadserver.com",
+    "yieldmo.com", "exponential.com", "tribalfusion.com", "contextweb.com",
+    "adblade.com", "sovrn.com", "conversantmedia.com", "media.net", "sharethrough.com",
+    "spotxchange.com", "teads.tv", "zedo.com", "adcolony.com", "unityads.unity3d.com",
+    "applovin.com", "ironsrc.com", "vungle.com", "chartboost.com", "tapjoy.com",
+    "fyber.com", "smaato.net", "inmobi.com", "mopub.com", "hotjar.com", "clarity.ms"
 )
 
-// Real video/playlist files only.
-private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd|webm)(\?|#|$)""", RegexOption.IGNORE_CASE)
+// 68-byte 1x1 transparent PNG for neutralizing image ad trackers
+private val TRANSPARENT_1X1_PNG = byteArrayOf(
+    0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x0D.toByte(), 0x0A.toByte(), 0x1A.toByte(), 0x0A.toByte(),
+    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x0D.toByte(), 0x49.toByte(), 0x48.toByte(), 0x44.toByte(), 0x52.toByte(),
+    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(),
+    0x08.toByte(), 0x06.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x1F.toByte(), 0x15.toByte(), 0xC4.toByte(),
+    0x89.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x0A.toByte(), 0x49.toByte(), 0x44.toByte(), 0x41.toByte(),
+    0x54.toByte(), 0x78.toByte(), 0x9C.toByte(), 0x63.toByte(), 0x00.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(),
+    0x05.toByte(), 0x00.toByte(), 0x01.toByte(), 0x0D.toByte(), 0x0A.toByte(), 0x2D.toByte(), 0xB4.toByte(), 0x00.toByte(),
+    0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x49.toByte(), 0x45.toByte(), 0x4E.toByte(), 0x44.toByte(), 0xAE.toByte(),
+    0x42.toByte(), 0x60.toByte(), 0x82.toByte()
+)
 
-private fun isVideoUrl(url: String): Boolean {
-    if (!url.startsWith("http", ignoreCase = true)) return false
-    val lower = url.lowercase()
-
-    // Strict rejection of non-video web pages and assets (never capture watchbox.php or embed pages)
-    if (lower.contains("watchbox") || lower.contains(".php") || lower.contains(".html") ||
-        lower.contains(".htm") || lower.contains(".js") || lower.contains(".css") ||
-        lower.contains(".json") || lower.contains(".svg") || lower.contains(".png") ||
-        lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".ico") ||
-        lower.contains("llvpn.com") || lower.contains("tag.min.js") || lower.contains("doubleclick")
-    ) {
+private fun isAdUrl(url: String): Boolean {
+    if (isVideoUrl(url) || url.contains(".ts", ignoreCase = true) || url.contains(".m4s", ignoreCase = true)) {
         return false
     }
-
-    if (isTrailerUrl(lower)) return false
-
-    // Real video/playlist streams
-    if (VIDEO_URL_REGEX.containsMatchIn(url)) return true
-    if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mpd")) return true
-
-    // Direct streaming endpoints on supported CDNs (must not be web pages)
-    if ((lower.contains("hakunaymatata.com") || lower.contains("hakunayamata.com") ||
-            lower.contains("proxy22.shop") || lower.contains("watch22.shop")) &&
-        (lower.contains("/bt/") || lower.contains("/stream") || lower.contains("/video/") || lower.contains("playlist"))
+    val lower = url.lowercase()
+    if (AD_DOMAINS.any { lower.contains(it) }) return true
+    if (lower.contains("/popunder") || lower.contains("/pop-under") || lower.contains("popunder.js") ||
+        lower.contains("/popups.js") || lower.contains("/popup.js") ||
+        lower.contains("/adserver/") || lower.contains("/adservice/") ||
+        lower.contains("/adsystem/") || lower.contains("/advertisement/")
     ) {
         return true
     }
     return false
 }
 
-private val TRAILER_KEYWORDS = listOf(
-    "trailer", "preview", "teaser", "sample",
-    "googlevideo.com", "youtube.com", "youtu.be", "ytimg.com"
-)
-
-private fun isTrailerUrl(url: String): Boolean {
-    if (url.isBlank()) return false
+private fun createAdBlockResponse(url: String): WebResourceResponse {
     val lower = url.lowercase()
-    return TRAILER_KEYWORDS.any { lower.contains(it) }
-}
+    val isJs = lower.endsWith(".js") || lower.contains(".js?") || lower.contains("tag.min") ||
+        lower.contains("/ads") || lower.contains("script")
+    val isImg = lower.endsWith(".png") || lower.endsWith(".gif") || lower.endsWith(".jpg") ||
+        lower.endsWith(".jpeg") || lower.endsWith(".webp") || lower.endsWith(".ico")
 
-/**
- * One captured video link strictly per resolution.
- * [resolution] is e.g. "1080p", "720p", "480p", "360p", or "Auto".
- * Exactly ONE link per resolution is stored and displayed.
- */
-private data class CapturedResolutionLink(
-    val resolution: String,
-    val url: String,
-    val score: Long,
-    val isPreferredHost: Boolean
-)
-
-private fun scoreVideoLink(url: String, resolution: String?): Long {
-    var score = 0L
-    val lower = url.lowercase()
-
-    // Massive priority for hakunayamata.com / hakunaymatata.com
-    if (lower.contains("hakunaymatata.com") || lower.contains("hakunayamata.com")) {
-        score += 100_000L
-    } else if (lower.contains("proxy22.shop") || lower.contains("watch22.shop")) {
-        score += 30_000L
-    } else if (lower.contains("mzfi.me")) {
-        score += 20_000L
-    } else if (lower.contains("netmirror")) {
-        score += 10_000L
-    }
-
-    // Format priority: HLS (.m3u8) > MP4 > MPD
-    if (lower.contains(".m3u8")) {
-        score += 25_000L
-    } else if (lower.contains(".mp4")) {
-        score += 15_000L
-    } else if (lower.contains(".mpd")) {
-        score += 10_000L
-    }
-
-    // Known resolution value adds to score
-    val num = resolution?.filter { it.isDigit() }?.toIntOrNull() ?: 0
-    score += (num * 10L)
-
-    // Penalize chunk / range / segment fragments
-    if (lower.contains(".ts") || lower.contains("segment") || lower.contains("range=")) {
-        score -= 40_000L
-    }
-
-    // Reject non-video / iframe / trailers
-    if (lower.contains("watchbox") || lower.contains(".php") || lower.contains("trailer") || lower.contains(".html")) {
-        score -= 500_000L
-    }
-
-    return score
-}
-
-private fun normalizeResolution(raw: String?): String? {
-    if (raw.isNullOrBlank()) return null
-    val clean = raw.trim().lowercase()
-    if (clean == "auto") return "Auto"
-    if (clean == "4k" || clean == "uhd") return "2160p"
-    val num = clean.filter { it.isDigit() }
-    if (num.isNotEmpty()) {
-        val n = num.toIntOrNull()
-        if (n != null && n in 144..4320) {
-            return "${n}p"
+    return when {
+        isJs -> {
+            val stubJs = """
+                /* UraniumTV AdBlock Stub */
+                window.llvpnLoaded = true;
+                window.canRunAds = true;
+                window.isAdBlockActive = false;
+                window.adblock = false;
+            """.trimIndent().toByteArray(Charsets.UTF_8)
+            WebResourceResponse(
+                "application/javascript",
+                "utf-8",
+                200,
+                "OK",
+                mapOf(
+                    "Access-Control-Allow-Origin" to "*",
+                    "Cache-Control" to "public, max-age=86400"
+                ),
+                ByteArrayInputStream(stubJs)
+            )
+        }
+        isImg -> {
+            WebResourceResponse(
+                "image/png",
+                null,
+                200,
+                "OK",
+                mapOf(
+                    "Access-Control-Allow-Origin" to "*",
+                    "Cache-Control" to "public, max-age=86400"
+                ),
+                ByteArrayInputStream(TRANSPARENT_1X1_PNG)
+            )
+        }
+        else -> {
+            WebResourceResponse(
+                "text/plain",
+                "utf-8",
+                200,
+                "OK",
+                mapOf("Access-Control-Allow-Origin" to "*"),
+                ByteArrayInputStream(ByteArray(0))
+            )
         }
     }
-    return null
 }
 
-private fun formatResolutionDisplay(res: String): String {
-    return when (res.lowercase()) {
-        "2160p" -> "2160p (4K Ultra HD)"
-        "1440p" -> "1440p (2K Quad HD)"
-        "1080p" -> "1080p (Full HD)"
-        "720p" -> "720p (HD)"
-        "480p" -> "480p (SD)"
-        "360p" -> "360p (Data Saver)"
-        "240p" -> "240p (Low Quality)"
-        "auto" -> "Auto (Best Quality)"
-        else -> res
-    }
-}
+// Real video/playlist files only. ".ts" segments and generic "video" URLs are NOT matched.
+private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|$)""", RegexOption.IGNORE_CASE)
+
+private fun isVideoUrl(url: String): Boolean =
+    url.startsWith("http", ignoreCase = true) && VIDEO_URL_REGEX.containsMatchIn(url)
+
+/** One captured video link. [resolution] is e.g. "480p", or null while unknown. */
+private data class CapturedLink(val key: String, val url: String, val resolution: String?)
 
 /** Same file = same URL without the query (the "sign" token changes between requests). */
 private fun linkKey(url: String): String =
     url.substringBefore('#').substringBefore('?').lowercase()
 
 private fun resolutionValue(resolution: String?): Int =
-    resolution?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+    resolution?.removeSuffix("p")?.toIntOrNull() ?: 0
 
 /** Turns the real video size (from the <video> element) into a label like "480p". */
 private fun resolutionLabel(width: Int, height: Int): String? {
@@ -229,59 +202,22 @@ private fun resolutionLabel(width: Int, height: Int): String? {
     return "${closest}p"
 }
 
-/** Extracts video resolution like "1080p", "720p" directly from URL segments or query params. */
-private fun extractResolutionFromUrl(url: String): String? {
-    val clean = url.substringBefore('?')
-    val match = Regex("""(?i)(?:^|[\W_])(2160|1440|1080|720|480|360|240)p?(?:[\W_]|$)""").find(clean)
-    if (match != null) {
-        val num = match.groupValues[1]
-        val pos = match.range.first
-        if (pos <= 0 || clean[pos] != ':') {
-            return "${num}p"
-        }
+/** Rank links preferring hakunayamata.com / hakunaymatata.com and higher quality. */
+private fun rankCapturedLink(link: CapturedLink): Long {
+    var score = 0L
+    val lower = link.url.lowercase()
+    if (lower.contains("hakunaymatata.com") || lower.contains("hakunayamata.com")) {
+        score += 100_000L
+    } else if (lower.contains("proxy22.shop") || lower.contains("watch22.shop")) {
+        score += 20_000L
     }
-    val query = url.substringAfter('?', "")
-    if (query.isNotEmpty()) {
-        val qMatch = Regex("""(?i)(?:q|quality|res|resolution)=(2160|1440|1080|720|480|360|240)p?""").find(query)
-        if (qMatch != null) return "${qMatch.groupValues[1]}p"
+    if (lower.contains(".m3u8")) {
+        score += 10_000L
+    } else if (lower.contains(".mp4")) {
+        score += 5_000L
     }
-    if (Regex("""(?i)(?:^|[\W_])(4k|uhd)(?:[\W_]|$)""").containsMatchIn(clean)) return "2160p"
-    return null
-}
-
-private fun parseMasterPlaylistVariants(masterUrl: String, content: String): List<Pair<String, String>> {
-    val variants = mutableListOf<Pair<String, String>>()
-    val lines = content.lines()
-    var currentRes: String? = null
-    for (line in lines) {
-        val trimmed = line.trim()
-        if (trimmed.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true)) {
-            val resMatch = Regex("""RESOLUTION=(\d+)x(\d+)""", RegexOption.IGNORE_CASE).find(trimmed)
-            if (resMatch != null) {
-                val w = resMatch.groupValues[1].toIntOrNull() ?: 0
-                val h = resMatch.groupValues[2].toIntOrNull() ?: 0
-                currentRes = resolutionLabel(w, h)
-            }
-        } else if (!trimmed.startsWith("#") && trimmed.isNotEmpty() && currentRes != null) {
-            val variantUrl = resolveRelativeUrl(masterUrl, trimmed)
-            variants.add(variantUrl to currentRes)
-            currentRes = null
-        }
-    }
-    return variants
-}
-
-private fun resolveRelativeUrl(baseUrl: String, relative: String): String {
-    return try {
-        URI(baseUrl).resolve(relative).toString()
-    } catch (e: Exception) {
-        if (relative.startsWith("http://") || relative.startsWith("https://")) {
-            relative
-        } else {
-            val prefix = baseUrl.substringBeforeLast('/')
-            "$prefix/$relative"
-        }
-    }
+    score += resolutionValue(link.resolution)
+    return score
 }
 
 /**
@@ -292,118 +228,12 @@ private const val DETECT_SCRIPT = """
 (function () {
   if (window.__nmDetect) return;
   window.__nmDetect = true;
-
-  // 1. Lock llvpnLoaded to true permanently so Private DNS / AdBlock cannot trigger anti-adblock
-  try {
-    Object.defineProperty(window, 'llvpnLoaded', {
-      get: function () { return true; },
-      set: function () { /* locked to true */ },
-      configurable: false
-    });
-  } catch (err) {
-    window.llvpnLoaded = true;
-  }
-  window.canRunAds = true;
-  window.isAdBlockActive = false;
-  window.adblock = false;
-  window.google_ad_client = "ca-pub-123456789";
-  window.adsbygoogle = { push: function () {} };
-
-  // 2. NetMirror extension detector reply (matches official extension 3.20.9)
-  function replyExtension() {
-    try {
-      window.postMessage({
-        type: 'NETMIRROR_EXTENSION_DETECTED',
-        source: 'netmirror-extension',
-        installed: true,
-        version: '3.20.9'
-      }, '*');
-    } catch (e) {}
-  }
-
   window.addEventListener('message', function (e) {
-    if (e.data && (e.data.type === 'NETMIRROR_CHECK' || e.data.type === 'CHECK_EXTENSION')) {
-      replyExtension();
+    if (e.source !== window) return;
+    if (e.data && e.data.type === 'NETMIRROR_CHECK') {
+      window.postMessage({ type: 'NETMIRROR_EXTENSION_DETECTED', installed: true }, '*');
     }
   });
-
-  // Announce extension repeatedly so React component immediately detects it
-  replyExtension();
-  setTimeout(replyExtension, 50);
-  setTimeout(replyExtension, 150);
-  setTimeout(replyExtension, 400);
-  setTimeout(replyExtension, 800);
-  setTimeout(replyExtension, 1500);
-  setInterval(replyExtension, 500);
-
-  // 3. Inject instant CSS shield to vanish any adblock or unsupported browser modal
-  try {
-    var style = document.createElement('style');
-    style.id = 'uranium-adshield-css';
-    style.textContent = [
-      '.adblock-container, .adblock-card, .adblock-icon, .adblock-steps,',
-      'div[class*="adblock"], div[class*="AdBlock"],',
-      'div[style*="z-index: 2147483647"]:not(:has(video)):not(:has(iframe)),',
-      'html.disable-popunder-overlay div[style*="z-index: 2147483647"] > div {',
-      '  display: none !important;',
-      '  opacity: 0 !important;',
-      '  visibility: hidden !important;',
-      '  pointer-events: none !important;',
-      '  height: 0 !important;',
-      '  max-height: 0 !important;',
-      '}'
-    ].join('\n');
-    (document.head || document.documentElement).appendChild(style);
-  } catch (e) {}
-
-  window.__nmIsTrailerVideo = function (v) {
-    if (!v) return false;
-    if (v.__nmIsTrailer) return true;
-    var src = (v.currentSrc || v.src || '').toLowerCase();
-    if (/(trailer|preview|teaser|sample|googlevideo|youtube\.com|youtu\.be)/i.test(src)) {
-      v.__nmIsTrailer = true;
-      return true;
-    }
-    var sources = v.querySelectorAll ? v.querySelectorAll('source') : [];
-    for (var i = 0; i < sources.length; i++) {
-      var s = (sources[i].src || '').toLowerCase();
-      if (/(trailer|preview|teaser|sample|googlevideo|youtube\.com|youtu\.be)/i.test(s)) {
-        v.__nmIsTrailer = true;
-        return true;
-      }
-    }
-    if (v.closest && v.closest('.trailer, [id*="trailer" i], [class*="trailer" i]')) {
-      v.__nmIsTrailer = true;
-      return true;
-    }
-    var cur = v.parentElement;
-    for (var j = 0; j < 6 && cur && cur !== document.body; j++) {
-      var text = (cur.innerText || '').toLowerCase();
-      if (text.indexOf('trailer:') >= 0 || text.indexOf('trailer :') >= 0 || /^\s*trailer\b/i.test(text)) {
-        v.__nmIsTrailer = true;
-        return true;
-      }
-      if (cur.className && typeof cur.className === 'string' && /trailer|preview/i.test(cur.className)) {
-        v.__nmIsTrailer = true;
-        return true;
-      }
-      cur = cur.parentElement;
-    }
-    if (v.loop && v.muted && v.duration > 0 && v.duration < 360) {
-      v.__nmIsTrailer = true;
-      return true;
-    }
-    return false;
-  };
-
-  window.__nmRegisterTrailer = function (u) {
-    if (!u || typeof u !== 'string') return;
-    try {
-      if (window.AndroidBridge && window.AndroidBridge.onTrailerDetected) {
-        window.AndroidBridge.onTrailerDetected(u);
-      }
-    } catch (e) {}
-  };
 })();
 """
 
@@ -564,7 +394,6 @@ private const val LIMIT_SCRIPT = """
     try { blocked = bridge.isBlocked(); } catch (e) {}
     var playing = false;
     document.querySelectorAll('video').forEach(function (v) {
-      if (window.__nmIsTrailerVideo && window.__nmIsTrailerVideo(v)) return;
       attach(v);
       if (blocked) { if (!v.paused) v.pause(); return; }
       if (v.duration > 60 && !v.paused && !v.ended && !v.seeking && v.readyState > 2) playing = true;
@@ -575,51 +404,117 @@ private const val LIMIT_SCRIPT = """
 """
 
 /**
- * Scans for trailer preview videos, mutes/pauses them, and registers their URLs with the Android bridge
- * so they are never captured as movie links.
+ * Powerful AdBlocker & Anti-Adblock Defeater script.
+ * Neutralizes anti-adblock detection (llvpnLoaded, canRunAds, etc.), blocks popups/popunders,
+ * removes ad overlays, and suppresses ad-related errors.
  */
-private const val TRAILER_SCRIPT = """
+private const val ADBLOCK_SCRIPT = """
 (function () {
-  if (window.__nmTrailerScan) return;
-  window.__nmTrailerScan = true;
+  if (window.__uraniumAdBlockReady) return;
+  window.__uraniumAdBlockReady = true;
 
-  function scanForTrailers() {
-    var fn = window.__nmIsTrailerVideo;
-    var reg = window.__nmRegisterTrailer;
-    if (!fn || !reg) return;
-
-    document.querySelectorAll('video').forEach(function (v) {
-      if (fn(v)) {
-        v.__nmIsTrailer = true;
-        try { v.pause(); v.muted = true; } catch (e) {}
-        if (v.currentSrc) reg(v.currentSrc);
-        if (v.src) reg(v.src);
-        v.querySelectorAll('source').forEach(function (s) {
-          if (s.src) reg(s.src);
-        });
-      }
+  // 1. Force llvpnLoaded to always return true, neutralizing the NetMirror adblock check
+  try {
+    Object.defineProperty(window, 'llvpnLoaded', {
+      get: function () { return true; },
+      set: function () {},
+      configurable: true,
+      enumerable: true
     });
+  } catch (e) {
+    window.llvpnLoaded = true;
+  }
 
-    document.querySelectorAll('.info-section, .content').forEach(function (el) {
-      var text = (el.innerText || '').toLowerCase();
-      if (text.indexOf('trailer:') >= 0) {
-        el.querySelectorAll('video, source').forEach(function (media) {
-          var u = media.src || media.currentSrc;
-          if (u) reg(u);
-        });
+  // 2. Spoof common anti-adblock detection variables and bait properties
+  try {
+    window.canRunAds = true;
+    window.isAdBlockActive = false;
+    window.adblock = false;
+    window.google_ad_client = "ca-pub-0000000000000000";
+    window.google_ad_status = 1;
+  } catch (e) {}
+
+  // 3. Block popups / window.open traps while providing a harmless dummy window
+  try {
+    window.open = function (url, target, features) {
+      return {
+        closed: true,
+        focus: function () {},
+        blur: function () {},
+        close: function () {},
+        location: { href: url || '' }
+      };
+    };
+  } catch (e) {}
+
+  // 4. Suppress error events from blocked ad/tracking scripts
+  window.addEventListener('error', function (e) {
+    if (e.filename && (e.filename.indexOf('ad') !== -1 || e.filename.indexOf('llvpn') !== -1)) {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  // 5. Inject styles to hide ad containers, popunder overlays, and adblock warning cards
+  function injectAdblockStyles() {
+    if (document.getElementById('__uranium_adblock_css__')) return;
+    var style = document.createElement('style');
+    style.id = '__uranium_adblock_css__';
+    style.textContent = `
+      .adblock-container, .adblock-card,
+      div[class*="adblock"], div[id*="adblock"],
+      div[style*="z-index: 2147483647"],
+      div[style*="z-index: 999999"],
+      div[style*="z-index: 99999"],
+      .popunder, .popup-overlay, .ad-overlay, .ad-banner, .adsbox {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+        opacity: 0 !important;
+      }
+    `;
+    var target = document.head || document.documentElement;
+    if (target) target.appendChild(style);
+  }
+
+  // 6. Clean rogue full-screen click traps and adblock warning cards
+  function cleanAdElements() {
+    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) {
+      el.remove();
+    });
+    document.querySelectorAll('div, a, iframe').forEach(function (el) {
+      if (el.tagName === 'VIDEO' || el.querySelector('video')) return;
+      var s = window.getComputedStyle(el);
+      if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex) > 10000) {
+        var rect = el.getBoundingClientRect();
+        if (rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8) {
+          el.remove();
+        }
       }
     });
   }
 
-  setInterval(scanForTrailers, 1000);
-  document.addEventListener('DOMContentLoaded', scanForTrailers);
-  window.addEventListener('load', scanForTrailers);
-  scanForTrailers();
+  injectAdblockStyles();
+  document.addEventListener('DOMContentLoaded', function () {
+    injectAdblockStyles();
+    cleanAdElements();
+  });
+  window.addEventListener('load', function () {
+    injectAdblockStyles();
+    cleanAdElements();
+  });
+
+  new MutationObserver(function () {
+    cleanAdElements();
+  }).observe(document.documentElement, { childList: true, subtree: true });
 })();
 """
 
-// Page helper: hides "extension not enabled" warnings, unlocks download buttons, reports
-// the video that is loaded in the player with real size (width x height), and hooks quality buttons.
+// Everything that must run as early as possible on every page.
+private const val START_SCRIPT = ADBLOCK_SCRIPT + DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + LIMIT_SCRIPT
+
+// Page helper: hides "extension not enabled" warnings, unlocks download buttons, and reports
+// the video that is loaded in the player together with its real size (width x height).
+// Throttled so it does not slow the site down.
 private const val PAGE_SCRIPT = """
 (function () {
   if (window.__nmPage) return;
@@ -628,67 +523,41 @@ private const val PAGE_SCRIPT = """
   var last = '';
 
   function reportVideo(v) {
-    var fn = window.__nmIsTrailerVideo;
-    if (fn && fn(v)) return;
-    var src = v.currentSrc || v.src || '';
+    var src = v.currentSrc || v.src;
+    if (!src || !VIDEO_RE.test(src)) return;
     var w = v.videoWidth || 0;
     var h = v.videoHeight || 0;
     if (h === 0) return; // metadata not loaded yet
     var sig = src + '|' + w + 'x' + h;
-    if (sig === last) return;
+    if (sig === last) return; // only report when the video or its quality changes
     last = sig;
     try { window.AndroidBridge.onVideoPlaying(src, w, h); } catch (e) {}
   }
 
   function scanVideos() {
     document.querySelectorAll('video').forEach(function (v) {
-      var fn = window.__nmIsTrailerVideo;
-      if (fn && fn(v)) {
-        try { v.pause(); v.muted = true; } catch (e) {}
-        var reg = window.__nmRegisterTrailer;
-        if (reg) {
-          if (v.currentSrc) reg(v.currentSrc);
-          if (v.src) reg(v.src);
-        }
-        return;
-      }
       reportVideo(v);
       if (!v.__nm) {
         v.__nm = true;
-        ['loadedmetadata', 'resize', 'playing', 'canplay', 'timeupdate'].forEach(function (ev) {
+        ['loadedmetadata', 'resize', 'playing'].forEach(function (ev) {
           v.addEventListener(ev, function () { reportVideo(v); });
         });
       }
     });
   }
 
-  document.addEventListener('click', function (e) {
-    var target = e.target;
-    if (!target) return;
-    var el = target.closest('li, button, div, span, a');
-    if (!el) return;
-    var text = (el.innerText || el.textContent || '').trim();
-    var match = text.match(/\b(2160p|1440p|1080p|720p|480p|360p|240p|4k|1080|720|480|360)\b/i);
-    if (match) {
-      var raw = match[1].toLowerCase();
-      var label = raw.endsWith('p') ? raw : (raw === '4k' ? '2160p' : raw + 'p');
-      try { window.AndroidBridge.onQualitySelected(label); } catch (err) {}
-    }
-  }, true);
-
   function hideWarnings() {
-    var blockers = document.querySelectorAll('.adblock-container, .adblock-card, div[class*="adblock"], div[class*="AdBlock"]');
-    blockers.forEach(function (el) {
-      try { el.remove(); } catch (e) { el.style.display = 'none'; }
-    });
-
     var keywords = ['extension not enable', 'extension not enabled', 'adblocker detected',
-      'ad blocker detected', 'disable your adblock', 'extension required', 'private dns', 'browser not supported'];
+      'ad blocker detected', 'disable your adblock', 'extension required', 'private dns', 'preventing required resources'];
+    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) {
+      el.remove();
+    });
     document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(function (el) {
       var t = (el.innerText || '').toLowerCase();
-      if (t.length > 0 && t.length < 120 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
-        var box = el.closest('.adblock-container, .adblock-card, div') || el;
-        try { box.remove(); } catch (e) { box.style.display = 'none'; }
+      if (t.length > 0 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
+        if (!el.querySelector('video') && el.tagName !== 'VIDEO') {
+          el.style.display = 'none';
+        }
       }
     });
   }
@@ -722,13 +591,10 @@ private const val PAGE_SCRIPT = """
   setTimeout(cleanup, 1000);
   setTimeout(cleanup, 3000);
   setTimeout(cleanup, 6000);
-  setInterval(scanVideos, 1000);
+  setInterval(scanVideos, 1000); // cheap: only looks at <video> elements
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
 })();
 """
-
-// Everything that must run as early as possible on every page, including child player iframes.
-private const val START_SCRIPT = DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + TRAILER_SCRIPT + LIMIT_SCRIPT + PAGE_SCRIPT
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -744,28 +610,34 @@ fun NetMirrorScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
 
-    // Strictly ONE link per resolution: e.g. "1080p", "720p", "480p", "360p", or "Auto"
-    var resolutionLinks by remember { mutableStateOf<Map<String, CapturedResolutionLink>>(emptyMap()) }
-    var selectedResolution by remember { mutableStateOf<String?>(null) }
+    var capturedLinks by remember { mutableStateOf<List<CapturedLink>>(emptyList()) }
+    var selectedKey by remember { mutableStateOf<String?>(null) }
 
-    // Display list: strictly one link per resolution, sorted with hakunayamata / hakunaymatata first,
-    // highest resolution first, and best score.
-    val displayLinks = remember(resolutionLinks) {
-        val specific = resolutionLinks.filterKeys { it != "Auto" }
-        val items = if (specific.isNotEmpty()) specific.values.toList() else resolutionLinks.values.toList()
-        items.sortedWith(
-            compareByDescending<CapturedResolutionLink> { it.isPreferredHost }
-                .thenByDescending { resolutionValue(it.resolution) }
-                .thenByDescending { it.score }
-        )
+    // Deduplicated list: strictly ONE link per video quality resolution.
+    // If the video has multiple qualities (1080p, 720p, 480p, 360p), each quality has exactly 1 link.
+    // hakunayamata.com / hakunaymatata.com is strongly preferred as the best link.
+    val displayLinks = remember(capturedLinks) {
+        val knownResLinks = capturedLinks
+            .filter { !it.resolution.isNullOrBlank() }
+            .groupBy { it.resolution!! }
+            .mapValues { (_, links) -> links.maxByOrNull { rankCapturedLink(it) }!! }
+
+        if (knownResLinks.isNotEmpty()) {
+            knownResLinks.values.sortedWith(
+                compareByDescending<CapturedLink> { rankCapturedLink(it) }
+                    .thenByDescending { resolutionValue(it.resolution) }
+            )
+        } else {
+            val best = capturedLinks.maxByOrNull { rankCapturedLink(it) }
+            if (best != null) listOf(best) else emptyList()
+        }
     }
 
-    // Auto-select the absolute best link (highest resolution on hakunayamata.com)
+    // Auto-select best link when links change
     LaunchedEffect(displayLinks) {
         if (displayLinks.isNotEmpty()) {
-            if (selectedResolution == null || displayLinks.none { it.resolution == selectedResolution }) {
-                val best = displayLinks.firstOrNull { it.isPreferredHost } ?: displayLinks.first()
-                selectedResolution = best.resolution
+            if (selectedKey == null || displayLinks.none { it.key == selectedKey }) {
+                selectedKey = displayLinks.first().key
             }
         }
     }
@@ -774,131 +646,59 @@ fun NetMirrorScreen(
     var customView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    // Pages the WebView is allowed to navigate to (NetMirror + Cloudflare challenges + streaming player hosts).
+    // Pages the WebView is allowed to navigate to (NetMirror + Cloudflare challenges + player hosts + referer rules).
     val allowedHostHints = remember {
         listOf(
             "netmirror", "cloudflare", "challenges", "turnstile", "recaptcha", "hcaptcha",
-            "watch21", "watch22", "proxy22", "mzfi", "hakunaymatata", "hakunayamata", "moviebox"
+            "watch21.shop", "watch22.shop", "watch-download.shop", "proxy22.shop",
+            "imdb3.shop", "imdb4.shop", "movieboxonline.net", "mzfi.me"
         ) +
             AppConfig.REFERER_RULES.keys +
             AppConfig.REFERER_RULES.values.mapNotNull { runCatching { Uri.parse(it).host }.getOrNull() }
     }
 
-    val trailerKeys = remember { mutableSetOf<String>() }
-    val trailerUrls = remember { mutableSetOf<String>() }
-
-    fun isTrailer(url: String): Boolean {
-        if (url.isBlank()) return false
-        val lower = url.lowercase()
-        if (isTrailerUrl(lower)) return true
-        if (trailerUrls.any { it.isNotEmpty() && (lower.contains(it) || it.contains(lower)) }) return true
-        if (trailerKeys.contains(linkKey(url))) return true
-        return false
-    }
-
-    fun onTrailerDetectedFound(url: String) {
-        if (url.isBlank()) return
-        val key = linkKey(url)
-        trailerKeys.add(key)
-        val lower = url.lowercase()
-        trailerUrls.add(lower)
-        val base = lower.substringBefore('?').substringBefore('#')
-        if (base.isNotEmpty()) trailerUrls.add(base)
-
-        // Purge any trailer links
-        resolutionLinks = resolutionLinks.filterValues {
-            !isTrailer(it.url) && !it.url.contains(url, ignoreCase = true)
-        }
-        if (displayLinks.none { it.resolution == selectedResolution }) {
-            selectedResolution = displayLinks.firstOrNull()?.resolution
-        }
-    }
-
     fun isAllowedNavigation(url: String): Boolean {
         if (!(url.startsWith("http://") || url.startsWith("https://"))) return false
-        if (BLOCKED_DOMAINS.any { url.contains(it, ignoreCase = true) }) return false
+        if (isAdUrl(url)) return false
         if (allowedHostHints.any { url.contains(it, ignoreCase = true) }) return true
         return isVideoUrl(url)
     }
 
-    // Stores strictly ONE link per resolution. Automatically upgrades to hakunayamata / higher quality link.
-    fun upsertResolutionLink(url: String, resolution: String?, select: Boolean = false) {
-        if (!isVideoUrl(url) || isTrailer(url)) return
-        val rawRes = resolution ?: extractResolutionFromUrl(url) ?: "Auto"
-        val normRes = normalizeResolution(rawRes) ?: if (rawRes.equals("Auto", ignoreCase = true)) "Auto" else rawRes
-        val score = scoreVideoLink(url, normRes)
-        if (score <= -100_000L) return // invalid / rejected link
+    // Adds a link, or updates it if the same file is already in the list.
+    fun upsertLink(url: String, resolution: String?, select: Boolean) {
+        val key = linkKey(url)
+        val existing = capturedLinks.firstOrNull { it.key == key }
+        val newResolution = resolution ?: existing?.resolution
+        // Skip no-op updates (the network sends many range requests for the same file).
+        if (existing != null && existing.url == url && existing.resolution == newResolution &&
+            !(select && selectedKey != key)
+        ) return
 
-        val isHakuna = url.lowercase().contains("hakunaymatata.com") || url.lowercase().contains("hakunayamata.com")
-        val candidate = CapturedResolutionLink(
-            resolution = normRes,
-            url = url,
-            score = score,
-            isPreferredHost = isHakuna
-        )
-
-        val existing = resolutionLinks[normRes]
-        // Upgrade if: no link yet, or candidate is hakunayamata while existing is not, or higher score
-        val shouldReplace = existing == null ||
-            (isHakuna && !existing.isPreferredHost) ||
-            (candidate.score > existing.score && (!existing.isPreferredHost || isHakuna))
-
-        if (shouldReplace) {
-            val wasEmpty = resolutionLinks.isEmpty()
-            val updated = resolutionLinks.toMutableMap()
-            updated[normRes] = candidate
-
-            // If we now have specific resolutions, clean up "Auto" duplicate
-            if (normRes != "Auto" && updated.containsKey("Auto")) {
-                val autoLink = updated["Auto"]
-                if (autoLink != null && (autoLink.url == url || isHakuna)) {
-                    updated.remove("Auto")
-                }
-            }
-
-            resolutionLinks = updated
-            if (select || selectedResolution == null || (isHakuna && selectedResolution == "Auto")) {
-                selectedResolution = normRes
-            }
-            if (wasEmpty) {
-                Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
-            }
-        }
+        val wasEmpty = capturedLinks.isEmpty()
+        capturedLinks = (capturedLinks.filter { it.key != key } + CapturedLink(key, url, newResolution))
+            .sortedWith(
+                compareByDescending<CapturedLink> { rankCapturedLink(it) }
+                    .thenByDescending { resolutionValue(it.resolution) }
+                    .thenByDescending { it.url.contains(".m3u8", ignoreCase = true) }
+            )
+        if (select || selectedKey == null) selectedKey = key
+        if (wasEmpty) Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
     }
 
-    // From the network: link found, resolution not known yet or inferred from URL.
+    // From the network: link found, resolution not known yet.
     fun addCapturedLink(url: String) {
-        if (!isVideoUrl(url) || isTrailer(url)) return
-        val inferredRes = extractResolutionFromUrl(url)
-        upsertResolutionLink(url, inferredRes, select = (inferredRes != null && resolutionLinks.isEmpty()))
+        if (!isVideoUrl(url)) return
+        upsertLink(url, null, select = false)
     }
 
     // From the page: this is the video the player is playing right now, with its real size.
     fun onVideoPlayingFound(url: String, width: Int, height: Int) {
-        if (isTrailer(url)) return
-        val res = resolutionLabel(width, height) ?: return
-        if (url.startsWith("http", ignoreCase = true) && !url.startsWith("blob:", ignoreCase = true) && isVideoUrl(url)) {
-            upsertResolutionLink(url, res, select = true)
-        } else {
-            // Blob / MSE video playing: assign resolution to active or preferred link
-            val currentSelected = displayLinks.firstOrNull { it.resolution == selectedResolution }
-            val target = currentSelected ?: displayLinks.firstOrNull { it.isPreferredHost } ?: displayLinks.firstOrNull()
-            if (target != null && target.resolution == "Auto") {
-                upsertResolutionLink(target.url, res, select = true)
-            }
-        }
+        if (!isVideoUrl(url)) return // the JS bridge is reachable by any frame - validate here
+        val res = resolutionLabel(width, height)
+        upsertLink(url, res, select = true)
     }
 
-    // When the user clicks a quality button or option in the web player UI
-    fun onUserSelectedQuality(quality: String) {
-        val norm = normalizeResolution(quality) ?: return
-        if (displayLinks.any { it.resolution == norm }) {
-            selectedResolution = norm
-            Toast.makeText(context, "Selected $norm", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    val selected = displayLinks.firstOrNull { it.resolution == selectedResolution } ?: displayLinks.firstOrNull()
+    val selected = displayLinks.firstOrNull { it.key == selectedKey } ?: displayLinks.firstOrNull()
 
     fun exitFullscreen() {
         val act = activity ?: return
@@ -1019,14 +819,14 @@ fun NetMirrorScreen(
                             Text(
                                 text = buildString {
                                     append("Direct Link Captured!")
-                                    append(" (${formatResolutionDisplay(current.resolution)})")
+                                    current.resolution?.let { append(" ($it)") }
                                 },
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
 
-                            // Clean list: exactly ONE link per video quality resolution.
+                            // Clean list: strictly ONE link per video quality resolution.
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1034,8 +834,10 @@ fun NetMirrorScreen(
                                     .padding(top = 6.dp, bottom = 8.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                items(displayLinks, key = { it.resolution }) { item ->
-                                    val isSelected = item.resolution == selected?.resolution
+                                items(displayLinks, key = { it.key }) { item ->
+                                    val isSelected = item.key == selected?.key
+                                    val isHakuna = item.url.contains("hakunaymatata.com", ignoreCase = true) ||
+                                        item.url.contains("hakunayamata.com", ignoreCase = true)
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1043,13 +845,13 @@ fun NetMirrorScreen(
                                             .background(
                                                 if (isSelected) Color(0x4400E676) else Color(0x1AFFFFFF)
                                             )
-                                            .clickable { selectedResolution = item.resolution }
+                                            .clickable { selectedKey = item.key }
                                             .padding(horizontal = 6.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         RadioButton(
                                             selected = isSelected,
-                                            onClick = { selectedResolution = item.resolution },
+                                            onClick = { selectedKey = item.key },
                                             colors = RadioButtonDefaults.colors(
                                                 selectedColor = Color(0xFF00E676),
                                                 unselectedColor = Color.White
@@ -1058,12 +860,12 @@ fun NetMirrorScreen(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text(
-                                                    text = formatResolutionDisplay(item.resolution),
+                                                    text = item.resolution ?: "Auto Quality",
                                                     color = Color.White,
                                                     fontWeight = FontWeight.Bold,
                                                     fontSize = 14.sp
                                                 )
-                                                if (item.isPreferredHost) {
+                                                if (isHakuna) {
                                                     Spacer(Modifier.width(6.dp))
                                                     Surface(
                                                         color = Color(0xFF00E676),
@@ -1101,7 +903,7 @@ fun NetMirrorScreen(
                                 }
 
                                 Text(
-                                    text = "${displayLinks.size} resolution${if (displayLinks.size == 1) "" else "s"} available",
+                                    text = "${displayLinks.size} link${if (displayLinks.size == 1) "" else "s"} found",
                                     color = Color(0xFFB9F6CA),
                                     fontSize = 12.sp,
                                     modifier = Modifier.align(Alignment.CenterVertically)
@@ -1131,16 +933,6 @@ fun NetMirrorScreen(
                         @JavascriptInterface
                         fun onVideoPlaying(url: String, width: Int, height: Int) {
                             post { onVideoPlayingFound(url, width, height) }
-                        }
-
-                        @JavascriptInterface
-                        fun onTrailerDetected(url: String) {
-                            post { onTrailerDetectedFound(url) }
-                        }
-
-                        @JavascriptInterface
-                        fun onQualitySelected(quality: String) {
-                            post { onUserSelectedQuality(quality) }
                         }
 
                         @JavascriptInterface
@@ -1275,67 +1067,34 @@ fun NetMirrorScreen(
                         }
 
                         // One interceptor, three steps in order:
-                        // 1) spoof anti-adblock detector  2) block ads & trackers  3) capture video links  4) parse m3u8 playlists
+                        // 1) block ads  2) capture video links  3) add extension headers
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
                         ): WebResourceResponse? {
                             if (request == null) return null
                             val url = request.url.toString()
-                            val lowerUrl = url.lowercase()
 
-                            // 1) Spoof anti-adblock detector scripts (e.g. llvpn, tag.min.js) with 200 OK JS
-                            if (lowerUrl.contains("llvpn.com") || lowerUrl.contains("tag.min.js")) {
-                                val js = "window.llvpnLoaded = true; console.log('[DNS Shield] llvpn verified');"
-                                return WebResourceResponse(
-                                    "application/javascript",
-                                    "utf-8",
-                                    ByteArrayInputStream(js.toByteArray(Charsets.UTF_8))
-                                )
+                            // 1) Block ads & return clean stub so anti-adblock detection is neutralized
+                            if (isAdUrl(url)) {
+                                return createAdBlockResponse(url)
                             }
 
-                            // 2) Powerful DNS AdBlocker: neutralize ad networks, pop-unders, trackers with empty 200 OK
-                            if (BLOCKED_DOMAINS.any { lowerUrl.contains(it) }) {
-                                val isJs = lowerUrl.contains(".js")
-                                val mime = if (isJs) "application/javascript" else "text/plain"
-                                val content = if (isJs) "/* DNS shield blocked ad script */" else ""
-                                return WebResourceResponse(
-                                    mime,
-                                    "utf-8",
-                                    ByteArrayInputStream(content.toByteArray(Charsets.UTF_8))
-                                )
-                            }
-
-                            // 3) Capture video links seen on the network (never trailers)
-                            if (isVideoUrl(url) && !isTrailer(url)) {
+                            // 2) Capture video links seen on the network
+                            if (isVideoUrl(url)) {
                                 view?.post { addCapturedLink(url) }
                             }
 
-                            // 4) Referer rules + custom headers ONLY for .m3u8 playlists (parse variants without buffering huge video chunks)
-                            if (request.method.equals("GET", ignoreCase = true) &&
-                                url.startsWith("http", ignoreCase = true) &&
-                                lowerUrl.contains(".m3u8") &&
-                                !lowerUrl.contains(".ts")
-                            ) {
-                                val extra = AppConfig.resolveVideoHeaders(url)
-                                if (extra.isNotEmpty()) {
-                                    return try {
-                                        fetchWithHeaders(url, request.requestHeaders, extra) { variants ->
-                                            view?.post {
-                                                variants.forEach { (vUrl, vRes) ->
-                                                    if (!isTrailer(vUrl) && isVideoUrl(vUrl)) {
-                                                        upsertResolutionLink(vUrl, vRes, select = false)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        null // fall back to normal WebView load
-                                    }
-                                }
+                            // 3) Referer rules + custom headers (GET only)
+                            if (!request.method.equals("GET", ignoreCase = true)) return null
+                            if (!url.startsWith("http")) return null
+                            val extra = AppConfig.resolveVideoHeaders(url)
+                            if (extra.isEmpty()) return null
+                            return try {
+                                fetchWithHeaders(url, request.requestHeaders, extra)
+                            } catch (e: Exception) {
+                                null // fall back to a normal WebView load
                             }
-
-                            return null
                         }
                     }
 
@@ -1352,7 +1111,7 @@ fun NetMirrorScreen(
         WatchInAppDialog(
             reason = reason,
             onWatchInApp = {
-                val link = displayLinks.firstOrNull { it.resolution == selectedResolution } ?: displayLinks.firstOrNull()
+                val link = displayLinks.firstOrNull { it.key == selectedKey } ?: displayLinks.firstOrNull()
                 dismissLimit()
                 if (link != null) {
                     onDirectLinkFound(link.url)
@@ -1496,8 +1255,7 @@ private fun WatchInAppDialog(
 private fun fetchWithHeaders(
     url: String,
     pageHeaders: Map<String, String>,
-    extra: Map<String, String>,
-    onMasterPlaylistParsed: ((List<Pair<String, String>>) -> Unit)? = null
+    extra: Map<String, String>
 ): WebResourceResponse {
     val conn = URL(url).openConnection() as HttpURLConnection
     conn.instanceFollowRedirects = true
@@ -1514,19 +1272,7 @@ private fun fetchWithHeaders(
     }
 
     val code = conn.responseCode
-    val rawStream = if (code >= 400) conn.errorStream else conn.inputStream
-    val bytes = rawStream?.use { it.readBytes() } ?: ByteArray(0)
-
-    if (code in 200..299 && url.contains(".m3u8", ignoreCase = true)) {
-        val text = runCatching { String(bytes, Charsets.UTF_8) }.getOrNull()
-        if (text != null && text.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
-            val variants = parseMasterPlaylistVariants(url, text)
-            if (variants.isNotEmpty()) {
-                onMasterPlaylistParsed?.invoke(variants)
-            }
-        }
-    }
-
+    val stream = if (code >= 400) conn.errorStream else conn.inputStream
     val contentType = conn.contentType ?: "application/octet-stream"
     val mime = contentType.substringBefore(';').trim()
     val encoding = if (contentType.contains("charset=", ignoreCase = true))
@@ -1540,6 +1286,6 @@ private fun fetchWithHeaders(
     headers["Access-Control-Allow-Origin"] = "*"
 
     return WebResourceResponse(
-        mime, encoding, code, conn.responseMessage?.ifBlank { null } ?: "OK", headers, ByteArrayInputStream(bytes)
+        mime, encoding, code, conn.responseMessage?.ifBlank { null } ?: "OK", headers, stream
     )
 }

@@ -6,7 +6,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,7 +29,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -43,6 +41,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.AbyssOutline
+import com.example.ui.theme.AbyssSurfaceElevated
+import com.example.ui.theme.BodyFontFamily
+import com.example.ui.theme.CyanCore
+import com.example.ui.theme.DisplayFontFamily
+import com.example.ui.theme.ErrorRed
+import com.example.ui.theme.MistText
 import com.example.ui.theme.UraniumMotion
 import com.example.ui.theme.bouncyClick
 import com.google.firebase.auth.FirebaseAuth
@@ -50,18 +55,84 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.tasks.await
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+sealed class SubscriptionState {
+    data object NeverWhitelisted : SubscriptionState()
+    data object Lifetime : SubscriptionState()
+    data class Active(val expiresAt: Long) : SubscriptionState()
+    data class Expired(val expiresAt: Long) : SubscriptionState()
+}
+
+suspend fun resolveSubscriptionState(
+    database: FirebaseDatabase,
+    uid: String,
+    email: String?
+): SubscriptionState {
+    return try {
+        val uidWhitelisted = try {
+            if (uid.isNotBlank()) {
+                database.getReference("whitelist/$uid").get().await()
+                    .getValue(Boolean::class.java) == true
+            } else false
+        } catch (_: Exception) {
+            false
+        }
+
+        val resolvedKey: String? = when {
+            uidWhitelisted -> uid
+            !email.isNullOrBlank() -> {
+                val emailKey = email.replace(".", ",")
+                val emailWhitelisted = try {
+                    database.getReference("whitelist/$emailKey").get().await()
+                        .getValue(Boolean::class.java) == true
+                } catch (_: Exception) {
+                    false
+                }
+                if (emailWhitelisted) emailKey else null
+            }
+            else -> null
+        }
+
+        if (resolvedKey == null) return SubscriptionState.NeverWhitelisted
+
+        val metaSnapshot = database.getReference("whitelistMeta/$resolvedKey").get().await()
+        val expiresAt = metaSnapshot.child("expiresAt").getValue(Long::class.java) ?: 0L
+
+        when {
+            expiresAt <= 0L -> SubscriptionState.Lifetime
+            expiresAt > System.currentTimeMillis() -> SubscriptionState.Active(expiresAt)
+            else -> SubscriptionState.Expired(expiresAt)
+        }
+    } catch (_: Exception) {
+        SubscriptionState.NeverWhitelisted
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     onNavigateBack: () -> Unit,
-    onLogout: () -> Unit,
-    onNavigateToRoomHistory: () -> Unit = {}
+    onLogout: () -> Unit
 ) {
     val context = LocalContext.current
     val auth = remember { FirebaseAuth.getInstance() }
     val currentUser = auth.currentUser
     val uid = currentUser?.uid ?: ""
+    val email = currentUser?.email
+    var subscriptionState by remember { mutableStateOf<SubscriptionState>(SubscriptionState.NeverWhitelisted) }
+
+    LaunchedEffect(uid, email) {
+        if (uid.isNotBlank()) {
+            val database = FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
+            subscriptionState = resolveSubscriptionState(database, uid, email)
+        } else {
+            subscriptionState = SubscriptionState.NeverWhitelisted
+        }
+    }
 
     // Instant zero-latency local cache retrieval so name is never missing upon entry
     val cachedInitialName = remember(uid) {
@@ -83,15 +154,6 @@ fun ProfileScreen(
     var isPickingAvatar by remember { mutableStateOf(false) }
     var isSavingName by remember { mutableStateOf(false) }
     var saveSuccessTime by remember { mutableStateOf(0L) }
-    var createdRoomsCount by remember { mutableStateOf(RoomHistoryManager.getCreatedRooms(context, uid).size) }
-
-    LaunchedEffect(uid) {
-        if (uid.isNotBlank()) {
-            RoomHistoryManager.syncWithCloud(context, uid) { synced ->
-                createdRoomsCount = synced.size
-            }
-        }
-    }
 
     fun performSaveName(onComplete: (() -> Unit)? = null) {
         val cleanName = nameInput.trim()
@@ -101,7 +163,6 @@ fun ProfileScreen(
         }
 
         isSavingName = true
-        AppBufferingController.show("SAVING PROFILE TO REACTOR CORE...")
         name = cleanName
 
         UserProfileStorage.saveNameEverywhere(
@@ -109,14 +170,12 @@ fun ProfileScreen(
             name = cleanName,
             onSuccess = {
                 isSavingName = false
-                AppBufferingController.hide()
                 saveSuccessTime = System.currentTimeMillis()
                 Toast.makeText(context, "Name saved successfully!", Toast.LENGTH_SHORT).show()
                 onComplete?.invoke()
             },
             onFailure = { err ->
                 isSavingName = false
-                AppBufferingController.hide()
                 Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                 onComplete?.invoke()
             }
@@ -549,89 +608,107 @@ fun ProfileScreen(
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 6.dp)
                         )
+                    }
+                }
 
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = 18.dp),
-                            color = Color(0xFF1E2638)
-                        )
+                // Subscription & Whitelist Tracker Section
+                if (subscriptionState !is SubscriptionState.NeverWhitelisted) {
+                    val accentColor = when (subscriptionState) {
+                        is SubscriptionState.Lifetime, is SubscriptionState.Active -> CyanCore
+                        is SubscriptionState.Expired -> ErrorRed
+                        SubscriptionState.NeverWhitelisted -> Color.Transparent
+                    }
 
-                        // Room History Field & Navigation Menu
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "ROOM HISTORY",
-                                    color = Color(0xFF8A92A6),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 1.sp
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        text = "$createdRoomsCount ROOMS ARCHIVED",
-                                        color = NeonToxicGreen,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Black,
-                                        fontFamily = FontFamily.Monospace
+                    val statusText = when (val state = subscriptionState) {
+                        SubscriptionState.Lifetime -> "Subscription: Lifetime access"
+                        is SubscriptionState.Active -> {
+                            val dateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
+                            val formattedDate = dateFormat.format(Date(state.expiresAt))
+                            "Subscription active until $formattedDate"
+                        }
+                        is SubscriptionState.Expired -> {
+                            val dateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.getDefault())
+                            val formattedDate = dateFormat.format(Date(state.expiresAt))
+                            "Subscription expired on $formattedDate"
+                        }
+                        SubscriptionState.NeverWhitelisted -> ""
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(AbyssSurfaceElevated)
+                            .border(
+                                1.5.dp,
+                                Brush.linearGradient(
+                                    listOf(
+                                        accentColor.copy(alpha = 0.8f),
+                                        AbyssOutline,
+                                        accentColor.copy(alpha = 0.4f)
                                     )
+                                ),
+                                RoundedCornerShape(20.dp)
+                            )
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         modifier = Modifier
-                                            .size(7.dp)
-                                            .background(NeonToxicGreen, CircleShape)
-                                            .shadow(4.dp, CircleShape, spotColor = NeonToxicGreen)
+                                            .size(8.dp)
+                                            .background(accentColor, CircleShape)
                                     )
-                                }
-                            }
-
-                            Surface(
-                                color = Color(0xFF10192A),
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, NeonCyberCyan.copy(alpha = 0.6f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    NuclearRadiationBufferingIndicator(
-                                        size = 12.dp,
-                                        color = NeonCyberCyan,
-                                        glowColor = NeonToxicGreen
-                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "ARCHIVE",
-                                        color = NeonCyberCyan,
-                                        fontSize = 10.sp,
+                                        text = "SUBSCRIPTION",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
+                                        fontFamily = DisplayFontFamily,
+                                        letterSpacing = 1.sp
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(accentColor.copy(alpha = 0.18f))
+                                        .border(1.dp, accentColor.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = when (subscriptionState) {
+                                            SubscriptionState.Lifetime -> "LIFETIME"
+                                            is SubscriptionState.Active -> "ACTIVE"
+                                            is SubscriptionState.Expired -> "EXPIRED"
+                                            SubscriptionState.NeverWhitelisted -> ""
+                                        },
+                                        color = accentColor,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace,
+                                        letterSpacing = 0.5.sp
                                     )
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text(
+                                text = statusText,
+                                color = if (subscriptionState is SubscriptionState.Expired) ErrorRed else MistText,
+                                fontSize = 14.sp,
+                                fontFamily = BodyFontFamily,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
-
-                        Text(
-                            text = "Permanent telemetry archive of all rooms created by you. Open to inspect joined participants, stream links, and room codes.",
-                            color = Color(0xFF8A95A5),
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        FuturisticHazardButton(
-                            text = "OPEN ROOM HISTORY →",
-                            onClick = { onNavigateToRoomHistory() },
-                            gradient = listOf(Color(0xFF00E5FF), Color(0xFF39FF14)),
-                            height = 44.dp,
-                            cornerRadius = 10.dp
-                        )
                     }
                 }
 

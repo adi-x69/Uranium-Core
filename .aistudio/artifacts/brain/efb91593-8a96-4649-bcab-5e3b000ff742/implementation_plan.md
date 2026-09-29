@@ -1,166 +1,100 @@
-# Direct Link & YouTube Watch Separation, Rotating Nuclear Buffering, and Player Optimization
+# Master Technical Prompt: UraniumTV Architecture & Feature Updates (Post-Sept 26, 2026)
 
-A comprehensive architectural blueprint and implementation plan for completely decoupling the Direct Link video player from the YouTube watch experience in Uranium TV, adding custom rotating nuclear radiation buffering animations, enhancing gesture controls, and optimizing both streaming pipelines.
-
----
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following choices have been confirmed based on your requirements and preferences:
-> - **Complete Player Separation**: `WatchScreen.kt` will be strictly dedicated to ExoPlayer direct links (`.m3u8`, `.mp4`, `.mkv`, `.mpd`), completely removing embedded YouTube code, webviews, and title overlays at the top. `YouTubeWatchScreen.kt` will be strictly dedicated to YouTube with full web iframe quality selector menus, video title display, and synchronized playback.
-> - **Rotating Nuclear Radiation Buffering**: A stylized rotating tri-foil nuclear radiation symbol animation in neon uranium green/cyan, displayed both inside the video viewport whenever buffering occurs and across the app whenever network latency blocks user taps.
-> - **Precision Gesture Controls**: Added to both players:
->   1. Double-tap on left/right screen halves to seek -10s / +10s with visual neon wave ripple indicator.
->   2. Vertical swipe on the left side to adjust screen brightness.
->   3. Vertical swipe on the right side to adjust device media volume.
-> - **Direct Link Header Simplification**: The top title bar in `WatchScreen.kt` will no longer display the video name, showing only room information, participants, and playback status controls.
+This document contains the implementation plan and the comprehensive technical master prompt detailing all changes, architectural designs, algorithms, and data flows introduced into UraniumTV after September 26, 2026.
 
 ---
 
-## 1. Overview & Core Concept
+## Plan Overview
 
-### What It Does
-Uranium TV provides shared synchronized watch parties for both online direct streams (HLS/m3u8/mp4) and YouTube videos. Previously, `WatchScreen.kt` contained mixed logic for both ExoPlayer and YouTubePlayerView, causing overhead, UI clutter, and duplicate controls. This update:
-1. **Splits the Architecture Cleanly**: Routes YouTube links exclusively to `YouTubeWatchScreen.kt` and direct video links exclusively to `WatchScreen.kt`.
-2. **Eliminates Unnecessary Title in Direct Watch**: Direct link streams often have obscure file names or no metadata; removing the top title header cleans up the viewport and avoids cluttered URLs or placeholder titles.
-3. **Equips YouTube with Quality Control**: Features an accessible resolution/quality picker (Auto, 1080p, 720p, 480p, 360p, 240p) communicating with the YouTube iframe API.
-4. **Delivers High-Tech Nuclear Buffering Indicator**: Replaces standard circular spinners with a radioactive hazard tri-foil indicator that rotates smoothly on a glowing canvas.
-5. **Precision Touch Gestures**: Brings modern streaming app ergonomics (double-tap seek with ripples, swipe volume and brightness overlays) to both player experiences.
+1. **Section 1: NetMirror Stream Keying, Deduplication & Quality Engine**
+   - Clean regex detection (`VIDEO_URL_REGEX`) avoiding segment `.ts` matches.
+   - Strict one-link-per-resolution deduplication (`1080p`, `720p`, `480p`, `360p`).
+   - Domain scoring ranking `hakunayamata.com` / `hakunaymatata.com` over secondary proxies.
+   - JS-to-Android `<video>` dimension bridge and auto-selection.
 
-### Key Value
-- **Zero Glitch Stream Decoupling**: Direct links no longer initialize unused YouTube webview listeners; YouTube no longer allocates unused ExoPlayer audio/codec sessions.
-- **Immersion**: Clean, unobtrusive UI on direct links with zero text clutter.
-- **Network Resilience**: Slow connections trigger immediate, themed nuclear buffering feedback rather than silent freeze states.
+2. **Section 2: Minimalist Reactor Core Buffering Overlay**
+   - Streamlining `PlayerBufferingOverlay` in `FuturisticEffects.kt`.
+   - Removing status text labels to present a pure rotating nuclear radiation hazard symbol with glowing radial pulse.
+   - Integration in `WatchScreen.kt` and `YouTubeWatchScreen.kt`.
+
+3. **Section 3: Domain Rule Aliasing & Custom Headers**
+   - Inclusion of `hakunayamata.com` alongside `hakunaymatata.com` in `AppConfig.REFERER_RULES`.
+   - Automatic MIME type classification (`MimeTypes.APPLICATION_M3U8`) for HLS playback.
+
+4. **Section 4: Firebase Realtime Database Whitelist & Subscription Lifecycle**
+   - Dual-key lookup: Firebase Auth UID first, email with periods replaced by commas second.
+   - Paths: `/whitelist/<key>` (boolean) and `/whitelistMeta/<key>` (`expiresAt`, `grantedAt`).
+   - Strict rendering states: Hidden if never whitelisted; "Subscription: Lifetime access" if active without expiry; "Subscription active until [Date]" if future expiry; "Subscription expired on [Date]" if expired or revoked.
+   - Date formatting: Readable string (e.g., "September 30, 2026").
+
+5. **Section 5: Multi-Tiered Ad Blocker & Anti-Adblock Bypass Engine**
+   - Anti-Adblock detection spoofing: Immutable getter for `window.llvpnLoaded` returning `true`.
+   - Trap neutralization: `window.canRunAds = true`, `window.isAdBlockActive = false`, dummy `window.open` implementation.
+   - Fake 200 OK stub responses for intercepted ad scripts to satisfy `<script>` `onload` and prevent `onerror` triggering.
+   - 68-byte 1x1 transparent PNG stubs for tracking pixels.
+   - Dynamic CSS injection and DOM pruning for full-screen clickjack overlays (`z-index: 2147483647`) and `.adblock-container` / `.adblock-card` shields.
+   - Safe navigation allowlist permitting legitimate embed hosts (`watch21.shop`, `watch22.shop`, `watch-download.shop`, etc.) while rejecting ad redirects.
 
 ---
 
-## 2. User Experience & Visual Design
+## Master Technical Prompt Specification
 
-### Key User Flows
+```markdown
+You are building or maintaining UraniumTV (an advanced Android streaming and media playback app built with Kotlin, Jetpack Compose, ExoPlayer/Media3, and Firebase). Implement the following 5 core subsystems with exact accuracy, adhering to clean architecture, Material 3 aesthetics, and high performance:
 
+### 1. NETMIRROR STREAM RESOLUTION KEYING & DEDUPLICATION ENGINE
+In `NetMirrorScreen.kt`:
+- **Stream Identification**: Use a strict regex `\.(m3u8|mp4|mkv|mpd)(\?|#|$)` (case-insensitive) that ignores transport segments (`.ts`, `.m4s`) and non-stream URLs (`watchbox.php`).
+- **Keying & Normalization**: Compute unique stream keys using the base URL without query parameters or hash fragments (`url.substringBefore('#').substringBefore('?').lowercase()`).
+- **Real Resolution Labeling**: Bridge video playback events from WebView to Kotlin (`onVideoPlayingFound(url, width, height)`). Derive standardized labels ("1080p", "720p", "480p", "360p", "240p", "144p") using the formula `if (width in 1 until height) width else maxOf(height, width * 9 / 16)` mapped to the closest standard resolution.
+- **Strict Deduplication**: Aggregate captured links so that each distinct resolution label has strictly ONE link displayed.
+- **Server Prioritization Scoring**: Rank links using a priority comparator:
+  - Add 100,000 points if the URL domain contains `hakunayamata.com` or `hakunaymatata.com`.
+  - Add 20,000 points if the URL domain contains `proxy22.shop` or `watch22.shop`.
+  - Add 10,000 points for `.m3u8`, 5,000 for `.mp4`.
+  - Add the integer resolution value.
+- **Auto-Selection**: Automatically select the highest-scoring link upon link changes.
+
+### 2. MINIMALIST HAZARD REACTOR BUFFERING OVERLAY
+In `FuturisticEffects.kt`:
+- Refactor `PlayerBufferingOverlay(isBuffering: Boolean, modifier: Modifier)`:
+  - Display solely a centered, rotating nuclear radiation hazard icon with glowing neon Cyan/Green/Amber pulse effects.
+  - Omit all status text ("BUFFERING REACTOR STREAM...", etc.) below the symbol for a clean, non-intrusive aesthetic.
+  - Wire this overlay cleanly into both `WatchScreen.kt` and `YouTubeWatchScreen.kt`.
+
+### 3. REFERER RULE ALIASING & MEDIA3 MIME RESOLUTION
+In `AppConfig.kt` and `WatchScreen.kt`:
+- Ensure both `hakunayamata.com` and `hakunaymatata.com` are mapped to `https://movieboxonline.net/` in `REFERER_RULES`.
+- In `WatchScreen.kt`, explicitly check if the video URL contains `hakunayamata.com` or `hakunaymatata.com` (alongside `.m3u8` or `/hls`), and set `MediaItem.Builder().setMimeType(MimeTypes.APPLICATION_M3U8)` so ExoPlayer delegates to `HlsMediaSource`.
+
+### 4. FIREBASE REALTIME DATABASE SUBSCRIPTION & WHITELIST TRACKER
+In `ProfileScreen.kt`:
+- **Data Model**: Track `/whitelist/<key>` (Boolean) and `/whitelistMeta/<key>` (`expiresAt: Long`, `grantedAt: Long`).
+- **Key Resolution**: For the logged-in user, query the UID key first. If missing or false, query the sanitized email key (`user.email.replace('.', ',')`).
+- **Lifecycle States**:
+  1. *Never whitelisted*: If neither key exists in the database, do NOT show the subscription section at all.
+  2. *Lifetime Access*: If whitelisted and `expiresAt == 0L` or missing, display: `"Subscription: Lifetime access"`.
+  3. *Active Subscription*: If whitelisted and `expiresAt > System.currentTimeMillis()`, display: `"Subscription active until <Formatted Date>"` (formatted as readable date, e.g. "September 30, 2026").
+  4. *Expired Subscription*: If previously whitelisted but current time > `expiresAt`, or if revoked, display: `"Subscription expired on <Formatted Date>"`.
+- **Read-Only**: Only read from Firebase; do not push updates from the client app.
+- **Styling**: Match existing UraniumTV theme typography (`DisplayFontFamily`, `BodyFontFamily`), dark elevation (`AbyssSurfaceElevated`), and neon accents (`CyanCore`).
+
+### 5. MULTI-LAYERED AD BLOCKER & ANTI-ADBLOCK NEUTRALIZATION ENGINE
+In `NetMirrorScreen.kt`:
+- **Anti-AdBlock Defeater Script (Document Start)**:
+  - Inject an inline script via `WebViewCompat.addDocumentStartJavaScript` and fallback `onPageStarted`.
+  - Override `window.llvpnLoaded` with an immutable getter returning `true`:
+    `Object.defineProperty(window, 'llvpnLoaded', { get: () => true, set: () => {}, configurable: true });`
+  - Spoof anti-adblock traps: `window.canRunAds = true`, `window.isAdBlockActive = false`, `window.adblock = false`.
+  - Override `window.open` to return a safe dummy window object to block rogue popups without breaking site scripts.
+  - Inject global CSS setting `.adblock-container`, `.adblock-card`, and `div[style*="z-index: 2147483647"]` to `display: none !important;`.
+- **Request Interception (`shouldInterceptRequest`)**:
+  - Filter against a comprehensive streaming ad network blacklist (`llvpn.com`, `popads.net`, `popcash.net`, `propellerads.com`, `adsterra.com`, `clickadu.com`, `exoclick.com`, `juicyads.com`, `trafficjunky.com`, `doubleclick.net`, etc.).
+  - When an ad script is intercepted (e.g. `tag.min.js`), return HTTP 200 OK `application/javascript` with dummy declarations (`window.llvpnLoaded = true; window.canRunAds = true;`). This triggers `<script onload>` and stops `<script onerror>`.
+  - When an ad tracking image is intercepted, return a 68-byte 1x1 transparent PNG.
+- **DOM & Overlay Pruner**:
+  - Periodically and on `MutationObserver`, detect and remove transparent fixed overlay `div`s with `z-index > 10000` that intercept user taps.
+  - Automatically remove any `.adblock-container` or `.adblock-card` elements.
+- **Navigation Allowlist**:
+  - Restrict navigation to valid domains (`netmirror`, Cloudflare/Turnstile verification, and player embed hosts `watch21.shop`, `watch22.shop`, `watch-download.shop`, `proxy22.shop`, `movieboxonline.net`, `mzfi.me`). Block arbitrary redirects.
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              ROOM SCREEN                               │
-│                                                                        │
-│   Input Stream URL:                                                    │
-│   ├─ [ YouTube Link ]  ──►  Auto-detects YouTube  ──►  YouTubeWatchScreen  │
-│   └─ [ Direct Video ]  ──►  Auto-detects Video    ──►  WatchScreen (Exo)  │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-#### Flow A: Direct Video Link Watch Party (`WatchScreen.kt`)
-1. User enters room with an m3u8 or MP4 direct link.
-2. The player launches in immersive full-screen:
-   - **Top Bar**: Minimalist — Back button, Room Code pill, Live Participant avatars, Chat trigger. **No video title text**.
-   - **Gestures**:
-     - Double-tap left half: Neon green "-10s" ripple wave.
-     - Double-tap right half: Neon green "+10s" ripple wave.
-     - Swipe left half vertically: Brightness slider overlay (0% to 100% with sun icon).
-     - Swipe right half vertically: Volume slider overlay (0% to 100% with speaker icon).
-   - **Buffering State**: The player darkens with a glowing, rotating tri-foil nuclear radiation icon in the center.
-
-#### Flow B: YouTube Watch Party (`YouTubeWatchScreen.kt`)
-1. User enters room with a YouTube URL or video ID.
-2. The player launches with full YouTube synchronization:
-   - **Top Bar**: Back button, **Video Title** (cleanly fetched from YouTube oEmbed/title data), Room Code pill, Quality Badge (e.g., "1080p", "720p", "Auto"), Settings gear.
-   - **Quality Selector Dialog**: Tapping the quality badge opens a dialog allowing users to pick from Auto, 1080p, 720p, 480p, 360p, and 240p.
-   - **Gestures**: Left/right swipe for brightness/volume, double-tap to seek 10s.
-   - **Buffering State**: Rotating nuclear radiation icon with room synchronization status.
-
-#### Flow C: App-Wide Slow Internet / Loading State
-1. If any screen in Uranium TV is performing a network operation (joining room, verifying user, fetching NetMirror details) and user taps during network latency:
-2. The app displays the `NuclearRadiationBufferingIndicator` centered in a semi-transparent HUD backdrop to provide immediate visual feedback.
-
-### Visual Styling Tokens
-- **Primary Radiation Glow**: `#00FF66` (Neon Uranium Green) and `#00E5FF` (Electric Cyan).
-- **Hazard Core**: `#101820` (Dark Reactor Hull) with 3-blade tri-foil arcs separated by 60° gaps.
-- **Rotation Dynamics**: Continuous smooth rotation (1400ms per full 360° turn via `rememberInfiniteTransition`).
-- **Gesture HUDs**: Frosted glass rounded pill overlays (`Color(0xCC101820)`) with animated volume/brightness levels and haptic response.
-
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Complete Removal of YouTube Code from `WatchScreen.kt`**
-  - *Chosen Approach*: Strip out `YouTubePlayerView`, iframe JS injection, and YouTube player states from `WatchScreen.kt`. Keep `WatchScreen.kt` 100% dedicated to ExoPlayer.
-  - *Why*: Eliminates memory leaks, removes conflicting lifecycle events, simplifies error handling, and prevents video player freezes when switching rooms.
-- **Decision 2: Remove Video Title from Direct Watch Player Only**
-  - *Chosen Approach*: Direct links have no top title text. YouTube player retains the title fetched via YouTube oEmbed/metadata.
-  - *Why*: Direct links (m3u8, mp4) usually have ugly technical filenames (e.g. `stream_master_720.m3u8?token=xyz`) that look unpolished when displayed. YouTube videos have well-defined creative titles that users expect to see.
-- **Decision 3: Standalone Reusable `NuclearRadiationBufferingIndicator` Component**
-  - *Chosen Approach*: Build a standalone Jetpack Compose Canvas component in `FuturisticEffects.kt` that draws true geometric radiation blades (central hub, three 60-degree blade arcs, inner ring) and rotates smoothly.
-  - *Why*: Lightweight, 60fps hardware-accelerated Canvas rendering with zero external bitmap dependencies; can be embedded at any size (16dp inside buttons to 72dp for full-screen loading).
-
----
-
-## 4. Technical Architecture & Component Mapping
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        MAIN NAVIGATION ROUTER                          │
-│                           (MainActivity.kt)                            │
-└───────────────┬────────────────────────────────────────┬───────────────┘
-                │ isYouTube == false                     │ isYouTube == true
-                ▼                                        ▼
-┌─────────────────────────────────┐    ┌─────────────────────────────────┐
-│          WatchScreen            │    │       YouTubeWatchScreen        │
-│    (Dedicated ExoPlayer)        │    │    (Dedicated YouTube Player)   │
-├─────────────────────────────────┤    ├─────────────────────────────────┤
-│ • Pure ExoPlayer engine         │    │ • YouTubePlayerView engine      │
-│ • No Video Title in Header      │    │ • Video Title prominently shown │
-│ • Dual-tap 10s seek + ripples   │    │ • Dual-tap 10s seek + ripples   │
-│ • Swipe volume & brightness     │    │ • Swipe volume & brightness     │
-│ • Rotating Nuclear Buffering    │    │ • Rotating Nuclear Buffering    │
-│ • Realtime Firebase Room Sync   │    │ • Resolution & Quality Menu     │
-│ • Realtime Chat & Participants  │    │ • Realtime Firebase Room Sync   │
-└─────────────────────────────────┘    └─────────────────────────────────┘
-                │                                        │
-                └───────────────────┬────────────────────┘
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                   SHARED FUTURISTIC EFFECTS & HUD                      │
-│                        (FuturisticEffects.kt)                          │
-├────────────────────────────────────────────────────────────────────────┤
-│ • NuclearRadiationBufferingIndicator (Canvas tri-foil 360° spinner)    │
-│ • PlayerGestureOverlay (Double-tap ripple waves, Volume & Brightness)  │
-│ • GlobalNetworkBufferingOverlay (Slow network loading blocker)         │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### Component & State Plan
-
-1. **`FuturisticEffects.kt`**:
-   - `NuclearRadiationBufferingIndicator(modifier, size, color, strokeWidth)`:
-     - Uses `rememberInfiniteTransition` with continuous rotation `0f..360f`.
-     - Draws outer circle or pulse, three 60° blade arcs at angles `0°, 120°, 240°`, inner circular gap, and central dot.
-   - `PlayerGestureOverlay(onSeekRelative, onAdjustBrightness, onAdjustVolume, content)`:
-     - Detects horizontal/vertical drags and double-tap events on left/right partitions.
-     - Renders visual feedback (volume pill, brightness pill, "+10s" / "-10s" ripple flash).
-   - `GlobalLoadingIndicator`:
-     - Full-screen or box modal featuring the nuclear spinner and "CONNECTING TO REACTOR..." text.
-
-2. **`WatchScreen.kt` (Direct Link Watch)**:
-   - Remove `videoTitle` state and UI display from `TopBar`.
-   - Remove all residual `YouTubePlayerView`, `isYouTubeMode`, and YouTube iframe script logic.
-   - Attach `PlayerGestureOverlay` to `PlayerView`.
-   - Replace any default progress spinners with `NuclearRadiationBufferingIndicator`.
-   - Optimize ExoPlayer buffer parameters (`DefaultLoadControl` tuned for fast startup and low buffering on mobile data).
-
-3. **`YouTubeWatchScreen.kt` (YouTube Watch)**:
-   - Ensure clean `videoTitle` resolution from room snapshot and YouTube API.
-   - Implement full quality selector menu (`Auto`, `1080p`, `720p`, `480p`, `360p`, `240p`) wired to YouTube iframe `setPlaybackQuality` / `setPlaybackQualityRange`.
-   - Integrate `PlayerGestureOverlay` for double-tap seek and swipe gestures.
-   - Replace standard spinners with `NuclearRadiationBufferingIndicator`.
-
-4. **`RoomScreen.kt` & `MainActivity.kt`**:
-   - Ensure seamless routing: URLs with YouTube IDs go to `YouTubeWatchScreen`, direct streams go to `WatchScreen`.
-
----
-
-## 5. Next Feature Recommendations for Future Iterations
-
-1. **Picture-in-Picture (PiP) Mode**: Enable Android native PiP so users can watch their room sync while chatting or multitasking.
-2. **Audio-Only Mode**: Save 90% mobile bandwidth on direct links when listening to podcasts or concerts in rooms.
-3. **Voice Chat in Rooms**: Low-latency WebRTC push-to-talk channel so friends can talk while watching together.
-4. **Playback Speed Control (0.5x, 1x, 1.25x, 1.5x, 2x)**: Synced across the room for anime and lectures.
