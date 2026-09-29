@@ -73,7 +73,8 @@ fun HomeScreen(
     onNavigateToRoom: (String) -> Unit,
     onNavigateToFriends: () -> Unit,
     onNavigateToWatch: (String, Boolean) -> Unit,
-    onNavigateToProfile: () -> Unit
+    onNavigateToProfile: () -> Unit,
+    onNavigateToRoomHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var joinRoomCode by remember { mutableStateOf("") }
@@ -225,11 +226,8 @@ fun HomeScreen(
                 onNavigateToProfile = onNavigateToProfile,
                 onCreateRoom = {
                     isCreating = true
-                    AppBufferingController.show("GENERATING REACTOR CORE ROOM...")
                     val allowedChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
                     val roomCode = (1..6).map { allowedChars.random() }.joinToString("")
-                    val myName = UserProfileStorage.getCachedName(context, uid)
-                    val myUsername = UserProfileStorage.getCachedUsername(context, uid)
 
                     val roomData = mapOf(
                         "videoUrl" to "",
@@ -237,10 +235,6 @@ fun HomeScreen(
                         "position" to 0L,
                         "lastUpdatedBy" to uid,
                         "lastUpdatedAt" to ServerValue.TIMESTAMP,
-                        "createdAt" to ServerValue.TIMESTAMP,
-                        "creatorUid" to uid,
-                        "creatorName" to myName,
-                        "creatorUsername" to myUsername,
                         "hostUid" to uid,
                         "controlsUnlocked" to false,
                         "vibe" to com.example.ui.theme.RoomVibe.Default.name
@@ -249,19 +243,10 @@ fun HomeScreen(
                     db.child("rooms").child(roomCode).setValue(roomData)
                         .addOnSuccessListener {
                             isCreating = false
-                            AppBufferingController.hide()
-                            RoomHistoryManager.recordRoomCreated(
-                                context = context,
-                                roomCode = roomCode,
-                                creatorUid = uid,
-                                creatorName = myName,
-                                creatorUsername = myUsername
-                            )
                             onNavigateToRoom(roomCode)
                         }
                         .addOnFailureListener { exception ->
                             isCreating = false
-                            AppBufferingController.hide()
                             Toast.makeText(context, "Failed: ${exception.message}", Toast.LENGTH_LONG).show()
                         }
                 },
@@ -271,11 +256,9 @@ fun HomeScreen(
                         return@ReactorHomeHero
                     }
                     isJoining = true
-                    AppBufferingController.show("CONNECTING TO REACTOR ROOM...")
                     db.child("rooms").child(joinRoomCode).get()
                         .addOnSuccessListener { snapshot ->
                             isJoining = false
-                            AppBufferingController.hide()
                             if (snapshot.exists()) {
                                 onNavigateToRoom(joinRoomCode)
                             } else {
@@ -284,7 +267,6 @@ fun HomeScreen(
                         }
                         .addOnFailureListener {
                             isJoining = false
-                            AppBufferingController.hide()
                             Toast.makeText(context, "Error checking room", Toast.LENGTH_SHORT).show()
                         }
                 },
@@ -399,12 +381,6 @@ fun HomeScreen(
                     }
                 }
             }
-
-            // Global Tap Blocker Overlay with Rotating Nuclear Radiation Buffering Animation
-            GlobalNetworkBufferingOverlay(
-                isLoading = isCreating || isJoining,
-                message = if (isCreating) "GENERATING REACTOR CORE ROOM..." else "CONNECTING TO REACTOR ROOM..."
-            )
         }
     }
 }

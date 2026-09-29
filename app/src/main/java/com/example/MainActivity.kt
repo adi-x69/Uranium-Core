@@ -133,8 +133,7 @@ fun UraniumTvApp() {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        NavHost(
+    NavHost(
         navController = navController,
         startDestination = startDestination,
         enterTransition = {
@@ -270,6 +269,18 @@ fun UraniumTvApp() {
                 },
                 onNavigateToProfile = {
                     navController.navigate("profile")
+                },
+                onNavigateToRoomHistory = {
+                    navController.navigate("room_history")
+                }
+            )
+        }
+
+        composable("room_history") {
+            RoomHistoryScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToRoom = { roomCode: String ->
+                    navController.navigate("room/$roomCode")
                 }
             )
         }
@@ -282,18 +293,6 @@ fun UraniumTvApp() {
                     navController.navigate("login") {
                         popUpTo(0) { inclusive = true }
                     }
-                },
-                onNavigateToRoomHistory = {
-                    navController.navigate("room_history")
-                }
-            )
-        }
-
-        composable("room_history") {
-            RoomHistoryScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onEnterRoom = { roomCode ->
-                    navController.navigate("room/$roomCode")
                 }
             )
         }
@@ -389,13 +388,6 @@ fun UraniumTvApp() {
             )
         }
     } // closes NavHost
-
-        // App-wide Uranium Nuclear Radiation Buffering Tap Blocker Overlay
-        GlobalNetworkBufferingOverlay(
-            isLoading = AppBufferingController.isBuffering,
-            message = AppBufferingController.bufferingMessage
-        )
-    } // closes Box
 } // closes UraniumTvApp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
