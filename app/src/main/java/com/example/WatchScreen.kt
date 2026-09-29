@@ -42,8 +42,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
@@ -56,7 +57,6 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SignalWifiOff
 import androidx.compose.material.icons.filled.Sync
@@ -72,7 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1033,7 +1033,6 @@ fun WatchScreen(
                                             view.settings.mediaPlaybackRequiresUserGesture = false
                                             view.settings.javaScriptEnabled = true
                                             view.settings.domStorageEnabled = true
-                                            view.settings.databaseEnabled = true
                                             view.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
                                             view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                                             view.isLongClickable = false
@@ -1775,7 +1774,7 @@ private fun IncomingChatNotificationBanner(
             Spacer(modifier = Modifier.width(10.dp))
 
             Icon(
-                imageVector = Icons.Default.Chat,
+                imageVector = Icons.AutoMirrored.Filled.Chat,
                 contentDescription = "Open chat to reply",
                 tint = Color(0xFFFF5252).copy(alpha = 0.85f),
                 modifier = Modifier.size(16.dp)
@@ -1838,7 +1837,7 @@ private fun PlayerControlsOverlay(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             if (videoTitle.isNotEmpty()) {
                 Text(
@@ -1940,7 +1939,7 @@ private fun PlayerControlsOverlay(
                     Icon(Icons.Default.EmojiEmotions, contentDescription = "Reactions", tint = Color.White)
                 }
                 IconButton(onClick = onOpenChat) {
-                    Icon(Icons.Default.Chat, contentDescription = "Chat", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat", tint = Color.White)
                 }
                 IconButton(onClick = onToggleLandscape) {
                     Icon(
@@ -2286,7 +2285,7 @@ private fun ChatPanel(
                                 )
                         ) {
                             Icon(
-                                Icons.Default.Send,
+                                Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send",
                                 tint = if (input.isNotBlank()) Color.White else MistTextMuted,
                                 modifier = Modifier
