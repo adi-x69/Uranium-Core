@@ -20,6 +20,16 @@ object AppBufferingController {
         setBuffering(false, "")
     }
 
+    /** Shows the buffering overlay with an optional status message. */
+    fun show(message: String = "") {
+        setBuffering(true, message)
+    }
+
+    /** Hides the buffering overlay. */
+    fun hide() {
+        setBuffering(false, "")
+    }
+
     fun reportAction(vararg args: Any?) {}
     fun trigger(vararg args: Any?) {}
     fun runWithBuffering(vararg args: Any?, block: () -> Unit = {}) { block() }
@@ -29,9 +39,11 @@ object AppBufferingController {
 @Composable
 fun GlobalNetworkBufferingOverlay(
     isBuffering: Boolean = false,
+    isLoading: Boolean = false,
     message: String = "",
     onDismiss: () -> Unit = {},
     vararg args: Any?
 ) {
-    // Harmless no-op backward compatibility overlay
+    // Harmless no-op backward compatibility overlay.
+    // isLoading is accepted as an alias of isBuffering for older call sites.
 }
