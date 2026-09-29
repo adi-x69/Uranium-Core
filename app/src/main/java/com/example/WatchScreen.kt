@@ -541,7 +541,8 @@ fun WatchScreen(
                         val mediaItem = MediaItem.Builder()
                             .setUri(videoUrl)
                             .apply {
-                                if (videoUrl.contains(".m3u8", ignoreCase = true) || videoUrl.contains("/hls", ignoreCase = true)) {
+                                if (videoUrl.contains(".m3u8", ignoreCase = true) || videoUrl.contains("/hls", ignoreCase = true) ||
+                                    videoUrl.contains("hakunaymatata.com", ignoreCase = true) || videoUrl.contains("hakunayamata.com", ignoreCase = true)) {
                                     setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
                                 } else if (videoUrl.contains(".mpd", ignoreCase = true) || videoUrl.contains("/dash", ignoreCase = true)) {
                                     setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
@@ -929,8 +930,7 @@ fun WatchScreen(
 
             // Centered Rotating Nuclear Radiation Hazard Buffering Indicator
             PlayerBufferingOverlay(
-                isBuffering = (localPlaybackState == Player.STATE_BUFFERING),
-                statusText = "BUFFERING REACTOR STREAM..."
+                isBuffering = (localPlaybackState == Player.STATE_BUFFERING)
             )
 
             // Double-Tap 10s Seek Ripple Wave Overlay

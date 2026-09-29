@@ -613,13 +613,13 @@ fun NuclearRadiationBufferingIndicator(
 
 /**
  * Centered video buffering overlay displaying rotating nuclear radiation hazard symbol
- * with radioactive pulse and neon reactor status text.
+ * with radioactive pulse and neon reactor glow. Zero text below it.
  */
 @Composable
 fun PlayerBufferingOverlay(
     isBuffering: Boolean,
     modifier: Modifier = Modifier,
-    statusText: String = "SYNCHRONIZING STREAM..."
+    statusText: String? = null
 ) {
     AnimatedVisibility(
         visible = isBuffering,
@@ -630,32 +630,23 @@ fun PlayerBufferingOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.55f)),
+                .background(Color.Black.copy(alpha = 0.5f)),
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                color = Color(0xDD080C14),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.2.dp, NeonCyberCyan.copy(alpha = 0.7f)),
-                shadowElevation = 12.dp
+                color = Color(0xEE080C14),
+                shape = CircleShape,
+                border = BorderStroke(1.5.dp, NeonCyberCyan.copy(alpha = 0.85f)),
+                shadowElevation = 16.dp
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                Box(
+                    modifier = Modifier.padding(24.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     NuclearRadiationBufferingIndicator(
-                        size = 56.dp,
+                        size = 64.dp,
                         color = NeonCyberCyan,
                         glowColor = NeonToxicGreen
-                    )
-                    Text(
-                        text = statusText,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
                     )
                 }
             }

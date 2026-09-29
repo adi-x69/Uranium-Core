@@ -91,11 +91,29 @@ private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd|webm)(\?|#|$)""", Reg
 
 private fun isVideoUrl(url: String): Boolean {
     if (!url.startsWith("http", ignoreCase = true)) return false
-    if (VIDEO_URL_REGEX.containsMatchIn(url)) return true
     val lower = url.lowercase()
+
+    // Strict rejection of non-video web pages and assets (never capture watchbox.php or embed pages)
+    if (lower.contains("watchbox") || lower.contains(".php") || lower.contains(".html") ||
+        lower.contains(".htm") || lower.contains(".js") || lower.contains(".css") ||
+        lower.contains(".json") || lower.contains(".svg") || lower.contains(".png") ||
+        lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".ico") ||
+        lower.contains("llvpn.com") || lower.contains("tag.min.js") || lower.contains("doubleclick")
+    ) {
+        return false
+    }
+
+    if (isTrailerUrl(lower)) return false
+
+    // Real video/playlist streams
+    if (VIDEO_URL_REGEX.containsMatchIn(url)) return true
     if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mpd")) return true
-    if ((lower.contains("proxy22.shop") || lower.contains("hakunaymatata.com") || lower.contains("watch21.shop") || lower.contains("watch22.shop")) &&
-        (lower.contains("stream") || lower.contains("watchbox") || lower.contains("play") || lower.contains("video"))) {
+
+    // Direct streaming endpoints on supported CDNs (must not be web pages)
+    if ((lower.contains("hakunaymatata.com") || lower.contains("hakunayamata.com") ||
+            lower.contains("proxy22.shop") || lower.contains("watch22.shop")) &&
+        (lower.contains("/bt/") || lower.contains("/stream") || lower.contains("/video/") || lower.contains("playlist"))
+    ) {
         return true
     }
     return false
@@ -112,15 +130,94 @@ private fun isTrailerUrl(url: String): Boolean {
     return TRAILER_KEYWORDS.any { lower.contains(it) }
 }
 
-/** One captured video link. [resolution] is e.g. "480p", or null while unknown. */
-private data class CapturedLink(val key: String, val url: String, val resolution: String?)
+/**
+ * One captured video link strictly per resolution.
+ * [resolution] is e.g. "1080p", "720p", "480p", "360p", or "Auto".
+ * Exactly ONE link per resolution is stored and displayed.
+ */
+private data class CapturedResolutionLink(
+    val resolution: String,
+    val url: String,
+    val score: Long,
+    val isPreferredHost: Boolean
+)
+
+private fun scoreVideoLink(url: String, resolution: String?): Long {
+    var score = 0L
+    val lower = url.lowercase()
+
+    // Massive priority for hakunayamata.com / hakunaymatata.com
+    if (lower.contains("hakunaymatata.com") || lower.contains("hakunayamata.com")) {
+        score += 100_000L
+    } else if (lower.contains("proxy22.shop") || lower.contains("watch22.shop")) {
+        score += 30_000L
+    } else if (lower.contains("mzfi.me")) {
+        score += 20_000L
+    } else if (lower.contains("netmirror")) {
+        score += 10_000L
+    }
+
+    // Format priority: HLS (.m3u8) > MP4 > MPD
+    if (lower.contains(".m3u8")) {
+        score += 25_000L
+    } else if (lower.contains(".mp4")) {
+        score += 15_000L
+    } else if (lower.contains(".mpd")) {
+        score += 10_000L
+    }
+
+    // Known resolution value adds to score
+    val num = resolution?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+    score += (num * 10L)
+
+    // Penalize chunk / range / segment fragments
+    if (lower.contains(".ts") || lower.contains("segment") || lower.contains("range=")) {
+        score -= 40_000L
+    }
+
+    // Reject non-video / iframe / trailers
+    if (lower.contains("watchbox") || lower.contains(".php") || lower.contains("trailer") || lower.contains(".html")) {
+        score -= 500_000L
+    }
+
+    return score
+}
+
+private fun normalizeResolution(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    val clean = raw.trim().lowercase()
+    if (clean == "auto") return "Auto"
+    if (clean == "4k" || clean == "uhd") return "2160p"
+    val num = clean.filter { it.isDigit() }
+    if (num.isNotEmpty()) {
+        val n = num.toIntOrNull()
+        if (n != null && n in 144..4320) {
+            return "${n}p"
+        }
+    }
+    return null
+}
+
+private fun formatResolutionDisplay(res: String): String {
+    return when (res.lowercase()) {
+        "2160p" -> "2160p (4K Ultra HD)"
+        "1440p" -> "1440p (2K Quad HD)"
+        "1080p" -> "1080p (Full HD)"
+        "720p" -> "720p (HD)"
+        "480p" -> "480p (SD)"
+        "360p" -> "360p (Data Saver)"
+        "240p" -> "240p (Low Quality)"
+        "auto" -> "Auto (Best Quality)"
+        else -> res
+    }
+}
 
 /** Same file = same URL without the query (the "sign" token changes between requests). */
 private fun linkKey(url: String): String =
     url.substringBefore('#').substringBefore('?').lowercase()
 
 private fun resolutionValue(resolution: String?): Int =
-    resolution?.removeSuffix("p")?.toIntOrNull() ?: 0
+    resolution?.filter { it.isDigit() }?.toIntOrNull() ?: 0
 
 /** Turns the real video size (from the <video> element) into a label like "480p". */
 private fun resolutionLabel(width: Int, height: Int): String? {
@@ -647,8 +744,31 @@ fun NetMirrorScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
 
-    var capturedLinks by remember { mutableStateOf<List<CapturedLink>>(emptyList()) }
-    var selectedKey by remember { mutableStateOf<String?>(null) }
+    // Strictly ONE link per resolution: e.g. "1080p", "720p", "480p", "360p", or "Auto"
+    var resolutionLinks by remember { mutableStateOf<Map<String, CapturedResolutionLink>>(emptyMap()) }
+    var selectedResolution by remember { mutableStateOf<String?>(null) }
+
+    // Display list: strictly one link per resolution, sorted with hakunayamata / hakunaymatata first,
+    // highest resolution first, and best score.
+    val displayLinks = remember(resolutionLinks) {
+        val specific = resolutionLinks.filterKeys { it != "Auto" }
+        val items = if (specific.isNotEmpty()) specific.values.toList() else resolutionLinks.values.toList()
+        items.sortedWith(
+            compareByDescending<CapturedResolutionLink> { it.isPreferredHost }
+                .thenByDescending { resolutionValue(it.resolution) }
+                .thenByDescending { it.score }
+        )
+    }
+
+    // Auto-select the absolute best link (highest resolution on hakunayamata.com)
+    LaunchedEffect(displayLinks) {
+        if (displayLinks.isNotEmpty()) {
+            if (selectedResolution == null || displayLinks.none { it.resolution == selectedResolution }) {
+                val best = displayLinks.firstOrNull { it.isPreferredHost } ?: displayLinks.first()
+                selectedResolution = best.resolution
+            }
+        }
+    }
 
     // Fullscreen video (WebChromeClient.onShowCustomView)
     var customView by remember { mutableStateOf<View?>(null) }
@@ -658,7 +778,7 @@ fun NetMirrorScreen(
     val allowedHostHints = remember {
         listOf(
             "netmirror", "cloudflare", "challenges", "turnstile", "recaptcha", "hcaptcha",
-            "watch21", "watch22", "proxy22", "mzfi", "hakunaymatata", "moviebox"
+            "watch21", "watch22", "proxy22", "mzfi", "hakunaymatata", "hakunayamata", "moviebox"
         ) +
             AppConfig.REFERER_RULES.keys +
             AppConfig.REFERER_RULES.values.mapNotNull { runCatching { Uri.parse(it).host }.getOrNull() }
@@ -685,12 +805,12 @@ fun NetMirrorScreen(
         val base = lower.substringBefore('?').substringBefore('#')
         if (base.isNotEmpty()) trailerUrls.add(base)
 
-        // Purge any trailer links from capturedLinks
-        capturedLinks = capturedLinks.filter {
-            it.key != key && !it.url.contains(key, ignoreCase = true) && !isTrailer(it.url)
+        // Purge any trailer links
+        resolutionLinks = resolutionLinks.filterValues {
+            !isTrailer(it.url) && !it.url.contains(url, ignoreCase = true)
         }
-        if (selectedKey == key || capturedLinks.none { it.key == selectedKey }) {
-            selectedKey = capturedLinks.firstOrNull()?.key
+        if (displayLinks.none { it.resolution == selectedResolution }) {
+            selectedResolution = displayLinks.firstOrNull()?.resolution
         }
     }
 
@@ -701,32 +821,56 @@ fun NetMirrorScreen(
         return isVideoUrl(url)
     }
 
-    // Adds a link, or updates it if the same file is already in the list.
-    fun upsertLink(url: String, resolution: String?, select: Boolean) {
-        if (isTrailer(url)) return
-        val key = linkKey(url)
-        val existing = capturedLinks.firstOrNull { it.key == key }
-        val newResolution = resolution ?: existing?.resolution ?: extractResolutionFromUrl(url)
-        // Skip no-op updates (the network sends many range requests for the same file).
-        if (existing != null && existing.url == url && existing.resolution == newResolution &&
-            !(select && selectedKey != key)
-        ) return
+    // Stores strictly ONE link per resolution. Automatically upgrades to hakunayamata / higher quality link.
+    fun upsertResolutionLink(url: String, resolution: String?, select: Boolean = false) {
+        if (!isVideoUrl(url) || isTrailer(url)) return
+        val rawRes = resolution ?: extractResolutionFromUrl(url) ?: "Auto"
+        val normRes = normalizeResolution(rawRes) ?: if (rawRes.equals("Auto", ignoreCase = true)) "Auto" else rawRes
+        val score = scoreVideoLink(url, normRes)
+        if (score <= -100_000L) return // invalid / rejected link
 
-        val wasEmpty = capturedLinks.isEmpty()
-        capturedLinks = (capturedLinks.filter { it.key != key } + CapturedLink(key, url, newResolution))
-            .sortedWith(
-                compareByDescending<CapturedLink> { resolutionValue(it.resolution) }
-                    .thenByDescending { it.url.contains(".m3u8", ignoreCase = true) }
-            )
-        if (select || selectedKey == null) selectedKey = key
-        if (wasEmpty) Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
+        val isHakuna = url.lowercase().contains("hakunaymatata.com") || url.lowercase().contains("hakunayamata.com")
+        val candidate = CapturedResolutionLink(
+            resolution = normRes,
+            url = url,
+            score = score,
+            isPreferredHost = isHakuna
+        )
+
+        val existing = resolutionLinks[normRes]
+        // Upgrade if: no link yet, or candidate is hakunayamata while existing is not, or higher score
+        val shouldReplace = existing == null ||
+            (isHakuna && !existing.isPreferredHost) ||
+            (candidate.score > existing.score && (!existing.isPreferredHost || isHakuna))
+
+        if (shouldReplace) {
+            val wasEmpty = resolutionLinks.isEmpty()
+            val updated = resolutionLinks.toMutableMap()
+            updated[normRes] = candidate
+
+            // If we now have specific resolutions, clean up "Auto" duplicate
+            if (normRes != "Auto" && updated.containsKey("Auto")) {
+                val autoLink = updated["Auto"]
+                if (autoLink != null && (autoLink.url == url || isHakuna)) {
+                    updated.remove("Auto")
+                }
+            }
+
+            resolutionLinks = updated
+            if (select || selectedResolution == null || (isHakuna && selectedResolution == "Auto")) {
+                selectedResolution = normRes
+            }
+            if (wasEmpty) {
+                Toast.makeText(context, "Direct link captured!", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // From the network: link found, resolution not known yet or inferred from URL.
     fun addCapturedLink(url: String) {
         if (!isVideoUrl(url) || isTrailer(url)) return
         val inferredRes = extractResolutionFromUrl(url)
-        upsertLink(url, inferredRes, select = (inferredRes != null || capturedLinks.isEmpty()))
+        upsertResolutionLink(url, inferredRes, select = (inferredRes != null && resolutionLinks.isEmpty()))
     }
 
     // From the page: this is the video the player is playing right now, with its real size.
@@ -734,35 +878,27 @@ fun NetMirrorScreen(
         if (isTrailer(url)) return
         val res = resolutionLabel(width, height) ?: return
         if (url.startsWith("http", ignoreCase = true) && !url.startsWith("blob:", ignoreCase = true) && isVideoUrl(url)) {
-            upsertLink(url, res, select = true)
+            upsertResolutionLink(url, res, select = true)
         } else {
-            // Blob / MSE video playing: update resolution on active movie link
-            val currentSelected = capturedLinks.firstOrNull { it.key == selectedKey }
-            val target = currentSelected ?: capturedLinks.firstOrNull { !isTrailer(it.url) }
-            if (target != null) {
-                upsertLink(target.url, res, select = true)
+            // Blob / MSE video playing: assign resolution to active or preferred link
+            val currentSelected = displayLinks.firstOrNull { it.resolution == selectedResolution }
+            val target = currentSelected ?: displayLinks.firstOrNull { it.isPreferredHost } ?: displayLinks.firstOrNull()
+            if (target != null && target.resolution == "Auto") {
+                upsertResolutionLink(target.url, res, select = true)
             }
         }
     }
 
     // When the user clicks a quality button or option in the web player UI
     fun onUserSelectedQuality(quality: String) {
-        val norm = if (quality.endsWith("p", ignoreCase = true)) quality.lowercase() else "${quality}p"
-        val match = capturedLinks.firstOrNull { it.resolution.equals(norm, ignoreCase = true) }
-        if (match != null) {
-            selectedKey = match.key
+        val norm = normalizeResolution(quality) ?: return
+        if (displayLinks.any { it.resolution == norm }) {
+            selectedResolution = norm
             Toast.makeText(context, "Selected $norm", Toast.LENGTH_SHORT).show()
-        } else {
-            val currentSelected = capturedLinks.firstOrNull { it.key == selectedKey }
-            val target = currentSelected ?: capturedLinks.firstOrNull { !isTrailer(it.url) }
-            if (target != null) {
-                upsertLink(target.url, norm, select = true)
-                Toast.makeText(context, "Quality set to $norm", Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
-    val selected = capturedLinks.firstOrNull { it.key == selectedKey }
+    val selected = displayLinks.firstOrNull { it.resolution == selectedResolution } ?: displayLinks.firstOrNull()
 
     fun exitFullscreen() {
         val act = activity ?: return
@@ -883,23 +1019,23 @@ fun NetMirrorScreen(
                             Text(
                                 text = buildString {
                                     append("Direct Link Captured!")
-                                    current.resolution?.let { append(" ($it)") }
+                                    append(" (${formatResolutionDisplay(current.resolution)})")
                                 },
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
 
-                            // Scrollable list: pick which quality to use.
+                            // Clean list: exactly ONE link per video quality resolution.
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 120.dp)
+                                    .heightIn(max = 135.dp)
                                     .padding(top = 6.dp, bottom = 8.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                items(capturedLinks, key = { it.key }) { item ->
-                                    val isSelected = item.key == selectedKey
+                                items(displayLinks, key = { it.resolution }) { item ->
+                                    val isSelected = item.resolution == selected?.resolution
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -907,25 +1043,42 @@ fun NetMirrorScreen(
                                             .background(
                                                 if (isSelected) Color(0x4400E676) else Color(0x1AFFFFFF)
                                             )
-                                            .clickable { selectedKey = item.key }
+                                            .clickable { selectedResolution = item.resolution }
                                             .padding(horizontal = 6.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         RadioButton(
                                             selected = isSelected,
-                                            onClick = { selectedKey = item.key },
+                                            onClick = { selectedResolution = item.resolution },
                                             colors = RadioButtonDefaults.colors(
                                                 selectedColor = Color(0xFF00E676),
                                                 unselectedColor = Color.White
                                             )
                                         )
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = item.resolution ?: "Unknown quality",
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp
-                                            )
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = formatResolutionDisplay(item.resolution),
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp
+                                                )
+                                                if (item.isPreferredHost) {
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Surface(
+                                                        color = Color(0xFF00E676),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "⚡ PREFERRED CDN",
+                                                            color = Color.Black,
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.Black,
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                             Text(
                                                 text = item.url,
                                                 color = Color(0xFFB9F6CA),
@@ -948,7 +1101,7 @@ fun NetMirrorScreen(
                                 }
 
                                 Text(
-                                    text = "${capturedLinks.size} link${if (capturedLinks.size == 1) "" else "s"} found",
+                                    text = "${displayLinks.size} resolution${if (displayLinks.size == 1) "" else "s"} available",
                                     color = Color(0xFFB9F6CA),
                                     fontSize = 12.sp,
                                     modifier = Modifier.align(Alignment.CenterVertically)
@@ -1170,8 +1323,8 @@ fun NetMirrorScreen(
                                         fetchWithHeaders(url, request.requestHeaders, extra) { variants ->
                                             view?.post {
                                                 variants.forEach { (vUrl, vRes) ->
-                                                    if (!isTrailer(vUrl)) {
-                                                        upsertLink(vUrl, vRes, select = false)
+                                                    if (!isTrailer(vUrl) && isVideoUrl(vUrl)) {
+                                                        upsertResolutionLink(vUrl, vRes, select = false)
                                                     }
                                                 }
                                             }
@@ -1199,7 +1352,7 @@ fun NetMirrorScreen(
         WatchInAppDialog(
             reason = reason,
             onWatchInApp = {
-                val link = capturedLinks.firstOrNull { it.key == selectedKey } ?: capturedLinks.firstOrNull()
+                val link = displayLinks.firstOrNull { it.resolution == selectedResolution } ?: displayLinks.firstOrNull()
                 dismissLimit()
                 if (link != null) {
                     onDirectLinkFound(link.url)

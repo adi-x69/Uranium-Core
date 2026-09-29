@@ -1288,8 +1288,7 @@ fun YouTubeWatchScreen(
                 }
             // Centered Rotating Nuclear Radiation Hazard Buffering Indicator
             PlayerBufferingOverlay(
-                isBuffering = isYtBuffering,
-                statusText = "BUFFERING YOUTUBE STREAM..."
+                isBuffering = isYtBuffering
             )
 
             // Double-Tap 10s Seek Ripple Wave Overlay
@@ -1871,12 +1870,11 @@ private fun YtPlayerControlsOverlay(
 
         // Center play controls: 10s Backward, Play/Pause (or Buffering spinner), 10s Forward
         if (isBuffering) {
-            CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier
-                    .size(52.dp)
-                    .align(Alignment.Center),
-                strokeWidth = 3.dp
+            NuclearRadiationBufferingIndicator(
+                size = 52.dp,
+                color = NeonCyberCyan,
+                glowColor = NeonToxicGreen,
+                modifier = Modifier.align(Alignment.Center)
             )
         } else {
             Row(

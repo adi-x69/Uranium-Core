@@ -6,6 +6,7 @@ object AppConfig {
     // If the URL contains the key, that Referer and Origin are sent. First match wins.
     val REFERER_RULES: Map<String, String> = linkedMapOf(
         "hakunaymatata.com" to "https://mzfi.me/",
+        "hakunayamata.com" to "https://mzfi.me/",
         "mzfi.me" to "https://mzfi.me/",
         "encrypt.proxy22.shop" to "https://bet.watch22.shop/",
         "cdndash.proxy22.shop" to "https://bet.watch22.shop/",
