@@ -73,8 +73,8 @@ private data class PopupAccent(
     val glow: Color
 )
 
-private fun resolveAccent(accent: String): PopupAccent {
-    return when (accent.lowercase()) {
+private fun resolveAccent(accent: String?): PopupAccent {
+    return when (accent?.trim()?.lowercase()) {
         "celebrate" -> PopupAccent(core = CelebrateGreen, glow = CelebrateGlow)
         "warning" -> PopupAccent(core = WarningAmber, glow = WarningGlow)
         "urgent" -> PopupAccent(core = UrgentRed, glow = UrgentGlow)
