@@ -27,6 +27,14 @@ val OnlineGreen = Color(0xFF3DDC84)
 val SeenBlue = Color(0xFF4FA8FF)
 val ErrorRed = Color(0xFFFF5470)
 
+// Broadcast popup accent colors
+val CelebrateGreen = Color(0xFF10B981)
+val CelebrateGlow = Color(0xFF34D399)
+val WarningAmber = Color(0xFFF59E0B)
+val WarningGlow = Color(0xFFFBBF24)
+val UrgentRed = Color(0xFFFF2E4D)
+val UrgentGlow = Color(0xFFFF6B7F)
+
 /**
  * A "Room Vibe" is a selectable accent pairing the host picks for a room; everyone
  * inside sees it applied to the Room + Watch screens (buttons, slider, chat bubbles,

@@ -199,8 +199,8 @@ fun UraniumTvApp() {
         composable("signup") {
             SignupScreen(
                 onNavigateToLogin = { navController.popBackStack() },
-                onSignup = { name, username, email, password, avatarId ->
-                    if (name.isBlank() || username.isBlank() || email.isBlank() || password.isBlank()) {
+                onSignup = { name, username, password, avatarId ->
+                    if (name.isBlank() || username.isBlank() || password.isBlank()) {
                         Toast.makeText(context, "Please fill in all fields", Toast.LENGTH_SHORT).show()
                         return@SignupScreen
                     }
@@ -210,7 +210,6 @@ fun UraniumTvApp() {
                     }
                     val cleanName = name.trim()
                     val cleanUsername = username.trim().lowercase()
-                    val cleanEmail = email.trim().lowercase()
                     val authEmail = "$cleanUsername@uraniumtv.local"
                     auth.createUserWithEmailAndPassword(authEmail, password)
                         .addOnCompleteListener { task ->
@@ -228,12 +227,9 @@ fun UraniumTvApp() {
                                 val profileUpdates = mapOf(
                                     "users/$uid/name" to cleanName,
                                     "users/$uid/username" to cleanUsername,
-                                    "users/$uid/email" to cleanEmail,
-                                    "users/$uid/emailVerified" to true,
                                     "users/$uid/avatarId" to avatarId,
                                     "users/$uid/password" to password,
-                                    "usernames/$cleanUsername" to uid,
-                                    "emails/${sanitizeEmailKey(cleanEmail)}" to uid
+                                    "usernames/$cleanUsername" to uid
                                 )
                                 db.updateChildren(profileUpdates)
                                     .addOnCompleteListener { dbTask ->
@@ -940,10 +936,9 @@ fun BrightAvatarGlowRing(
 @Composable
 fun SignupScreen(
     onNavigateToLogin: () -> Unit,
-    onSignup: (String, String, String, String, String) -> Unit // name, username, email, password, avatarId
+    onSignup: (String, String, String, String) -> Unit // name, username, password, avatarId
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val db = remember {
         com.google.firebase.database.FirebaseDatabase
             .getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com")
@@ -955,96 +950,7 @@ fun SignupScreen(
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var selectedAvatarId by remember { mutableStateOf(MARVEL_AVATARS[0].id) }
-
-    // Step 2: collect + verify email. Kept as a separate simple step rather
-    // than squeezed into the artwork above, since sign_up.png only has 4
-    // input-box slots baked into it.
-    var showEmailStep by remember { mutableStateOf(false) }
-    var email by remember { mutableStateOf("") }
-    var otpInput by remember { mutableStateOf("") }
-    var generatedOtp by remember { mutableStateOf("") }
-    var otpGeneratedAt by remember { mutableStateOf(0L) }
-    var otpSent by remember { mutableStateOf(false) }
-    var isSendingOtp by remember { mutableStateOf(false) }
-    var isVerifying by remember { mutableStateOf(false) }
-    val otpValidityMs = 5 * 60 * 1000L
-
-    fun requestOtp() {
-        val cleanEmail = email.trim().lowercase()
-        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
-            Toast.makeText(context, "Enter a valid email address", Toast.LENGTH_SHORT).show()
-            return
-        }
-        isSendingOtp = true
-        db.child("emails").child(sanitizeEmailKey(cleanEmail)).get()
-            .addOnSuccessListener { snap ->
-                if (snap.exists()) {
-                    isSendingOtp = false
-                    Toast.makeText(context, "This email is already registered", Toast.LENGTH_SHORT).show()
-                    return@addOnSuccessListener
-                }
-                val code = generateOtpCode()
-                coroutineScope.launch {
-                    val result = sendOtpEmail(cleanEmail, code)
-                    isSendingOtp = false
-                    when (result) {
-                        is OtpSendResult.Success -> {
-                            generatedOtp = code
-                            otpGeneratedAt = System.currentTimeMillis()
-                            otpInput = ""
-                            otpSent = true
-                            Toast.makeText(context, "Code sent to $cleanEmail", Toast.LENGTH_SHORT).show()
-                        }
-                        is OtpSendResult.Failure -> {
-                            Toast.makeText(context, "Couldn't send code: ${result.detail}", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }
-            }
-            .addOnFailureListener {
-                isSendingOtp = false
-                Toast.makeText(context, "Couldn't verify email availability, try again", Toast.LENGTH_SHORT).show()
-            }
-    }
-
-    fun verifyOtp() {
-        if (System.currentTimeMillis() - otpGeneratedAt > otpValidityMs) {
-            Toast.makeText(context, "Code expired - resend and try again", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (otpInput.trim() != generatedOtp) {
-            Toast.makeText(context, "Incorrect code", Toast.LENGTH_SHORT).show()
-            return
-        }
-        isVerifying = true
-        onSignup(name, username, email.trim().lowercase(), password, selectedAvatarId)
-    }
-
-    if (showEmailStep) {
-        EmailVerificationScreen(
-            email = email,
-            onEmailChange = { email = it },
-            otpInput = otpInput,
-            onOtpInputChange = { otpInput = it },
-            otpSent = otpSent,
-            isSendingOtp = isSendingOtp,
-            isVerifying = isVerifying,
-            otpGeneratedAt = otpGeneratedAt,
-            otpValidityMs = otpValidityMs,
-            onRequestOtp = { requestOtp() },
-            onVerifyOtp = { verifyOtp() },
-            onChangeEmail = {
-                otpSent = false
-                otpInput = ""
-            },
-            onNavigateBack = {
-                showEmailStep = false
-                otpSent = false
-                otpInput = ""
-            }
-        )
-        return
-    }
+    var isCheckingUsername by remember { mutableStateOf(false) }
 
     Scaffold { innerPadding ->
         Box(
@@ -1207,6 +1113,7 @@ fun SignupScreen(
                                 alpha = pulseAlpha
                             }
                             .bouncyClick {
+                                if (isCheckingUsername) return@bouncyClick
                                 if (name.isBlank() || username.isBlank() || password.isBlank()) {
                                     Toast.makeText(context, "Please fill in all fields", Toast.LENGTH_SHORT).show()
                                     return@bouncyClick
@@ -1219,7 +1126,21 @@ fun SignupScreen(
                                     Toast.makeText(context, "Password must be at least 6 characters", Toast.LENGTH_SHORT).show()
                                     return@bouncyClick
                                 }
-                                showEmailStep = true
+                                val cleanUsername = username.trim().lowercase()
+                                isCheckingUsername = true
+                                db.child("usernames").child(cleanUsername).get()
+                                    .addOnSuccessListener { snap ->
+                                        isCheckingUsername = false
+                                        if (snap.exists()) {
+                                            Toast.makeText(context, "Username already taken", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            onSignup(name, username, password, selectedAvatarId)
+                                        }
+                                    }
+                                    .addOnFailureListener {
+                                        isCheckingUsername = false
+                                        onSignup(name, username, password, selectedAvatarId)
+                                    }
                             }
                     )
 

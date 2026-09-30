@@ -90,6 +90,26 @@ fun HomeScreen(
 
     val db = remember { FirebaseDatabase.getInstance("https://uranium-tv-core-default-rtdb.firebaseio.com").reference }
 
+    val broadcastManager = remember(uid) { BroadcastManager(context, uid) }
+
+    LaunchedEffect(uid) {
+        if (uid.isNotEmpty()) {
+            kotlinx.coroutines.delay(600)
+            broadcastManager.startListening()
+        }
+    }
+
+    DisposableEffect(broadcastManager) {
+        onDispose {
+            broadcastManager.stopListening()
+        }
+    }
+
+    LaunchedEffect(invites.size) {
+        broadcastManager.hasBlockingUi = invites.isNotEmpty()
+        broadcastManager.evaluateQueue()
+    }
+
     // So the profile button in the top bar shows this user's own avatar.
     DisposableEffect(uid) {
         val avatarRef = db.child("users").child(uid).child("avatarId")
@@ -380,6 +400,17 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+
+            val current = broadcastManager.currentBroadcast
+            if (current != null) {
+                BroadcastPopup(
+                    broadcast = current,
+                    myReaction = broadcastManager.myReactionFor(current.id),
+                    onReact = { broadcastManager.setReaction(current, it) },
+                    onClose = { broadcastManager.markSeen(current); broadcastManager.advance() }
+                )
+                LaunchedEffect(current.id) { broadcastManager.registerImpression(current) }
             }
         }
     }
