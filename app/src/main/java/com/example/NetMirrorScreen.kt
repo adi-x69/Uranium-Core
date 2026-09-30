@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.view.View
 import android.view.ViewGroup
@@ -106,81 +108,111 @@ private val TRANSPARENT_1X1_PNG = byteArrayOf(
     0x42.toByte(), 0x60.toByte(), 0x82.toByte()
 )
 
+// Hosts that must NEVER be treated as ads (the site itself, player embeds, video CDNs, captchas).
+private val TRUSTED_HOST_HINTS = listOf(
+    "netmirror", "hakunaymatata.com", "hakunayamata.com", "movieboxonline.net",
+    "watch21.shop", "watch22.shop", "watch-download.shop", "proxy22.shop",
+    "imdb3.shop", "imdb4.shop", "mzfi.me", "cloudflare", "hcaptcha", "recaptcha"
+)
+
+// Ad hosts that are matched by prefix (they have many country endings).
+private val AD_HOST_PREFIXES = listOf("adservice.google.", "pagead2.googlesyndication.")
+
+// Stream pieces (segments / subtitles) - never real "direct links" and never ads.
+private val SEGMENT_EXT_REGEX =
+    Regex("""\.(ts|m4s|m4a|m4v|aac|cmfv|cmfa|vtt|srt|webvtt)$""", RegexOption.IGNORE_CASE)
+
+private fun urlPath(url: String): String = url.substringBefore('#').substringBefore('?')
+
+private fun hostOf(url: String): String =
+    (runCatching { Uri.parse(url).host }.getOrNull() ?: "").lowercase()
+
+private fun isSegmentUrl(url: String): Boolean = SEGMENT_EXT_REGEX.containsMatchIn(urlPath(url))
+
+private fun headerValue(headers: Map<String, String>?, name: String): String =
+    headers?.entries?.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.lowercase() ?: ""
+
+/**
+ * Ad check by HOST (exact match or sub-domain), so a normal URL that only mentions an ad word
+ * in its path/query is never blocked, and the real site / player / CDN hosts are always safe.
+ */
 private fun isAdUrl(url: String): Boolean {
-    if (isVideoUrl(url) || url.contains(".ts", ignoreCase = true) || url.contains(".m4s", ignoreCase = true)) {
-        return false
-    }
-    val lower = url.lowercase()
-    if (AD_DOMAINS.any { lower.contains(it) }) return true
-    if (lower.contains("/popunder") || lower.contains("/pop-under") || lower.contains("popunder.js") ||
-        lower.contains("/popups.js") || lower.contains("/popup.js") ||
-        lower.contains("/adserver/") || lower.contains("/adservice/") ||
-        lower.contains("/adsystem/") || lower.contains("/advertisement/")
-    ) {
-        return true
-    }
-    return false
+    if (!url.startsWith("http", ignoreCase = true)) return false
+    val host = hostOf(url)
+    if (host.isEmpty()) return false
+    if (TRUSTED_HOST_HINTS.any { host.contains(it) }) return false
+    if (AD_DOMAINS.any { host == it || host.endsWith(".$it") }) return true
+    if (AD_HOST_PREFIXES.any { host.startsWith(it) }) return true
+    if (isVideoUrl(url) || isSegmentUrl(url)) return false
+    val path = urlPath(url).lowercase()
+    return path.contains("/popunder") || path.contains("/pop-under") || path.contains("popunder.js") ||
+        path.contains("/popups.js") || path.contains("/popup.js") ||
+        path.contains("/adserver/") || path.contains("/adservice/") ||
+        path.contains("/adsystem/") || path.contains("/advertisement/")
 }
 
-private fun createAdBlockResponse(url: String): WebResourceResponse {
-    val lower = url.lowercase()
-    val isJs = lower.endsWith(".js") || lower.contains(".js?") || lower.contains("tag.min") ||
-        lower.contains("/ads") || lower.contains("script")
-    val isImg = lower.endsWith(".png") || lower.endsWith(".gif") || lower.endsWith(".jpg") ||
-        lower.endsWith(".jpeg") || lower.endsWith(".webp") || lower.endsWith(".ico")
+private fun stubResponse(mime: String, encoding: String?, body: ByteArray): WebResourceResponse =
+    WebResourceResponse(
+        mime,
+        encoding,
+        200,
+        "OK",
+        mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Cache-Control" to "public, max-age=3600"
+        ),
+        ByteArrayInputStream(body)
+    )
+
+/**
+ * Returns a harmless "200 OK" of the RIGHT type for a blocked ad request, so the page's own
+ * onload handlers run and its anti-adblock check sees "everything loaded fine".
+ */
+private fun createAdBlockResponse(url: String, headers: Map<String, String>?): WebResourceResponse {
+    val path = urlPath(url).lowercase()
+    val accept = headerValue(headers, "Accept")
+    val dest = headerValue(headers, "Sec-Fetch-Dest")
+    val isCors = headerValue(headers, "Origin").isNotEmpty() // fetch()/XHR, not <script>/<img>
+
+    val isHtml = dest == "iframe" || dest == "document" || dest == "frame" ||
+        (accept.contains("text/html") && !path.endsWith(".js"))
+    val isCss = dest == "style" || path.endsWith(".css") || accept.startsWith("text/css")
+    val isImg = dest == "image" || accept.startsWith("image/") ||
+        path.endsWith(".png") || path.endsWith(".gif") || path.endsWith(".jpg") ||
+        path.endsWith(".jpeg") || path.endsWith(".webp") || path.endsWith(".ico") ||
+        path.endsWith(".svg")
+    val isJs = dest == "script" || path.endsWith(".js") || path.contains("tag.min")
 
     return when {
-        isJs -> {
-            val stubJs = """
-                /* UraniumTV AdBlock Stub */
-                window.llvpnLoaded = true;
-                window.canRunAds = true;
-                window.isAdBlockActive = false;
-                window.adblock = false;
-            """.trimIndent().toByteArray(Charsets.UTF_8)
-            WebResourceResponse(
-                "application/javascript",
-                "utf-8",
-                200,
-                "OK",
-                mapOf(
-                    "Access-Control-Allow-Origin" to "*",
-                    "Cache-Control" to "public, max-age=86400"
-                ),
-                ByteArrayInputStream(stubJs)
-            )
-        }
-        isImg -> {
-            WebResourceResponse(
-                "image/png",
-                null,
-                200,
-                "OK",
-                mapOf(
-                    "Access-Control-Allow-Origin" to "*",
-                    "Cache-Control" to "public, max-age=86400"
-                ),
-                ByteArrayInputStream(TRANSPARENT_1X1_PNG)
-            )
-        }
-        else -> {
-            WebResourceResponse(
-                "text/plain",
-                "utf-8",
-                200,
-                "OK",
-                mapOf("Access-Control-Allow-Origin" to "*"),
-                ByteArrayInputStream(ByteArray(0))
-            )
-        }
+        isHtml -> stubResponse("text/html", "utf-8", "<html><body></body></html>".toByteArray(Charsets.UTF_8))
+        isCss -> stubResponse("text/css", "utf-8", ByteArray(0))
+        isImg -> stubResponse("image/png", null, TRANSPARENT_1X1_PNG)
+        isJs -> stubResponse("application/javascript", "utf-8", AD_STUB_JS.toByteArray(Charsets.UTF_8))
+        isCors -> stubResponse("application/json", "utf-8", "{}".toByteArray(Charsets.UTF_8))
+        else -> stubResponse("application/javascript", "utf-8", AD_STUB_JS.toByteArray(Charsets.UTF_8))
     }
 }
 
-// Real video/playlist files only. ".ts" segments and generic "video" URLs are NOT matched.
-private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|$)""", RegexOption.IGNORE_CASE)
+private const val AD_STUB_JS = """
+/* UraniumTV AdBlock Stub */
+window.llvpnLoaded = true;
+window.canRunAds = true;
+window.isAdBlockActive = false;
+window.adblock = false;
+window.adsbygoogle = window.adsbygoogle || [];
+"""
+
+// Real video/playlist files only. Transport segments (.ts, .m4s) and generic "video" URLs are NOT matched.
+private val VIDEO_URL_REGEX = Regex("""\.(m3u8|mp4|mkv|mpd)(\?|#|&|/|$)""", RegexOption.IGNORE_CASE)
+
+// fMP4 pieces such as init.mp4 / seg-12.mp4 / chunk_3.mp4 are segments, not the movie.
+private val SEGMENT_NAME_REGEX =
+    Regex("""/(init|seg|segment|chunk|frag|fragment)[-_.]?[\w-]*\.mp4$""", RegexOption.IGNORE_CASE)
 
 private fun isVideoUrl(url: String): Boolean =
-    url.startsWith("http", ignoreCase = true) && VIDEO_URL_REGEX.containsMatchIn(url)
+    url.startsWith("http", ignoreCase = true) &&
+        VIDEO_URL_REGEX.containsMatchIn(url) &&
+        !SEGMENT_NAME_REGEX.containsMatchIn(urlPath(url))
 
 /** One captured video link. [resolution] is e.g. "480p", or null while unknown. */
 private data class CapturedLink(val key: String, val url: String, val resolution: String?)
@@ -293,10 +325,10 @@ private const val BRAND_SCRIPT = """
   function schedule() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(function () { pending = false; fixAll(); });
+    setTimeout(function () { pending = false; fixAll(); }, 400);
   }
 
-  new MutationObserver(schedule).observe(document.documentElement, {
+  (window.__nmObs || function () {})(schedule, {
     childList: true, subtree: true, characterData: true
   });
   document.addEventListener('DOMContentLoaded', fixAll);
@@ -344,7 +376,7 @@ private const val CLEAN_SCRIPT = """
     setTimeout(function () { pending = false; hideTelegramPromo(); }, 400);
   }
 
-  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  (window.__nmObs || function () {})(schedule);
   document.addEventListener('DOMContentLoaded', hideTelegramPromo);
   window.addEventListener('load', hideTelegramPromo);
   hideTelegramPromo();
@@ -404,16 +436,48 @@ private const val LIMIT_SCRIPT = """
 """
 
 /**
- * Powerful AdBlocker & Anti-Adblock Defeater script.
- * Neutralizes anti-adblock detection (llvpnLoaded, canRunAds, etc.), blocks popups/popunders,
- * removes ad overlays, and suppresses ad-related errors.
+ * Tiny helper used by the other scripts: starts a MutationObserver even when the script runs
+ * at document start, before <html> exists (observing null would throw and kill the whole script).
+ */
+private const val OBSERVE_SCRIPT = """
+(function () {
+  if (window.__nmObs) return;
+  try {
+    Object.defineProperty(window, '__nmObs', {
+      enumerable: false,
+      value: function (cb, opts) {
+        function go() {
+          try {
+            new MutationObserver(cb).observe(document.documentElement, opts || { childList: true, subtree: true });
+          } catch (e) {}
+        }
+        if (document.documentElement) { go(); return; }
+        var t = setInterval(function () {
+          if (document.documentElement) { clearInterval(t); go(); }
+        }, 10);
+      }
+    });
+  } catch (e) {}
+})();
+"""
+
+/**
+ * AdBlocker & Anti-Adblock Defeater script.
+ * - llvpnLoaded / canRunAds spoofing so the site's "disable your ad blocker" check passes
+ * - popup / window.open traps neutralised
+ * - full-screen click-trap overlays removed (never the player: anything holding a <video> or a
+ *   trusted player iframe is left alone, and iframes are never removed)
+ * IMPORTANT: it must NOT hide "bait" elements (.adsbox, .ad-banner ...). Anti-adblock scripts create
+ * those and check whether they got hidden - hiding them is exactly what triggers the warning.
  */
 private const val ADBLOCK_SCRIPT = """
 (function () {
   if (window.__uraniumAdBlockReady) return;
   window.__uraniumAdBlockReady = true;
 
-  // 1. Force llvpnLoaded to always return true, neutralizing the NetMirror adblock check
+  var TRUSTED = /netmirror|hakuna|movieboxonline|watch2[12]\.shop|watch-download\.shop|proxy22\.shop|imdb[34]\.shop|mzfi\.me|cloudflare|hcaptcha|recaptcha/i;
+
+  // 1. llvpnLoaded must always read as true
   try {
     Object.defineProperty(window, 'llvpnLoaded', {
       get: function () { return true; },
@@ -422,21 +486,22 @@ private const val ADBLOCK_SCRIPT = """
       enumerable: true
     });
   } catch (e) {
-    window.llvpnLoaded = true;
+    try { window.llvpnLoaded = true; } catch (e2) {}
   }
 
-  // 2. Spoof common anti-adblock detection variables and bait properties
+  // 2. Common anti-adblock flags
   try {
     window.canRunAds = true;
     window.isAdBlockActive = false;
     window.adblock = false;
-    window.google_ad_client = "ca-pub-0000000000000000";
+    window.adsbygoogle = window.adsbygoogle || [];
+    window.google_ad_client = 'ca-pub-0000000000000000';
     window.google_ad_status = 1;
   } catch (e) {}
 
-  // 3. Block popups / window.open traps while providing a harmless dummy window
+  // 3. Pop-up / pop-under traps get a harmless dummy window
   try {
-    window.open = function (url, target, features) {
+    window.open = function (url) {
       return {
         closed: true,
         focus: function () {},
@@ -447,91 +512,101 @@ private const val ADBLOCK_SCRIPT = """
     };
   } catch (e) {}
 
-  // 4. Suppress error events from blocked ad/tracking scripts
+  // 4. Errors coming from the blocked llvpn scripts are swallowed
   window.addEventListener('error', function (e) {
-    if (e.filename && (e.filename.indexOf('ad') !== -1 || e.filename.indexOf('llvpn') !== -1)) {
-      e.stopImmediatePropagation();
+    if (e && e.filename && e.filename.indexOf('llvpn') !== -1) {
+      try { e.stopImmediatePropagation(); } catch (x) {}
     }
   }, true);
 
-  // 5. Inject styles to hide ad containers, popunder overlays, and adblock warning cards
+  // 5. Hide ONLY the warning cards and the classic 2147483647 click-trap (never anything holding a player)
   function injectAdblockStyles() {
     if (document.getElementById('__uranium_adblock_css__')) return;
     var style = document.createElement('style');
     style.id = '__uranium_adblock_css__';
-    style.textContent = `
-      .adblock-container, .adblock-card,
-      div[class*="adblock"], div[id*="adblock"],
-      div[style*="z-index: 2147483647"],
-      div[style*="z-index: 999999"],
-      div[style*="z-index: 99999"],
-      .popunder, .popup-overlay, .ad-overlay, .ad-banner, .adsbox {
-        display: none !important;
-        visibility: hidden !important;
-        pointer-events: none !important;
-        opacity: 0 !important;
-      }
-    `;
+    style.textContent =
+      '.adblock-container, .adblock-card { display: none !important; }' +
+      'div[style*="z-index: 2147483647"]:not(:has(video)):not(:has(iframe)) { display: none !important; }';
     var target = document.head || document.documentElement;
     if (target) target.appendChild(style);
   }
 
-  // 6. Clean rogue full-screen click traps and adblock warning cards
-  function cleanAdElements() {
-    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) {
-      el.remove();
-    });
-    document.querySelectorAll('div, a, iframe').forEach(function (el) {
-      if (el.tagName === 'VIDEO' || el.querySelector('video')) return;
-      var s = window.getComputedStyle(el);
-      if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex) > 10000) {
-        var rect = el.getBoundingClientRect();
-        if (rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8) {
-          el.remove();
-        }
+  function holdsPlayer(el) {
+    try {
+      if (el.tagName === 'VIDEO' || el.querySelector('video')) return true;
+      var frames = el.querySelectorAll('iframe');
+      for (var i = 0; i < frames.length; i++) {
+        if (TRUSTED.test(frames[i].src || '')) return true;
       }
-    });
+    } catch (e) {}
+    return false;
+  }
+
+  // 6. Remove full-screen click-trap overlays that ad scripts append straight to <body>
+  var cleanTimer = null;
+  function cleanAdElements() {
+    cleanTimer = null;
+    var body = document.body;
+    if (!body) return;
+    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) { el.remove(); });
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var kids = body.children;
+    for (var i = kids.length - 1; i >= 0; i--) {
+      var el = kids[i];
+      if (el.tagName !== 'DIV' && el.tagName !== 'A' && el.tagName !== 'SPAN') continue;
+      if (holdsPlayer(el)) continue;
+      var s = window.getComputedStyle(el);
+      if (s.position !== 'fixed' && s.position !== 'absolute') continue;
+      if (!(parseInt(s.zIndex, 10) > 10000)) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < vw * 0.8 || r.height < vh * 0.8) continue;
+      if ((el.textContent || '').trim().length > 40) continue; // real UI (dialogs) has text; traps do not
+      el.remove();
+    }
+  }
+  function scheduleClean() {
+    if (cleanTimer) return;
+    cleanTimer = setTimeout(cleanAdElements, 700);
   }
 
   injectAdblockStyles();
-  document.addEventListener('DOMContentLoaded', function () {
-    injectAdblockStyles();
-    cleanAdElements();
-  });
-  window.addEventListener('load', function () {
-    injectAdblockStyles();
-    cleanAdElements();
-  });
-
-  new MutationObserver(function () {
-    cleanAdElements();
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', function () { injectAdblockStyles(); scheduleClean(); });
+  window.addEventListener('load', function () { injectAdblockStyles(); scheduleClean(); });
+  (window.__nmObs || function () {})(scheduleClean);
 })();
 """
 
-// Everything that must run as early as possible on every page.
-private const val START_SCRIPT = ADBLOCK_SCRIPT + DETECT_SCRIPT + BRAND_SCRIPT + CLEAN_SCRIPT + LIMIT_SCRIPT
-
-// Page helper: hides "extension not enabled" warnings, unlocks download buttons, and reports
-// the video that is loaded in the player together with its real size (width x height).
-// Throttled so it does not slow the site down.
+/**
+ * Page helper (runs in every frame, including the player iframe):
+ *  - reports the playing <video> together with its real size
+ *  - also catches playlists / big video files by their response type, so links that have no
+ *    ".m3u8" / ".mp4" in the address are found too
+ *  - removes "extension not enabled" / "ad blocker detected" warnings (only the small warning box,
+ *    never a big page container) and unlocks download buttons
+ */
 private const val PAGE_SCRIPT = """
 (function () {
   if (window.__nmPage) return;
   window.__nmPage = true;
-  var VIDEO_RE = /\.(m3u8|mp4|mkv|mpd)(\?|#|$)/i;
-  var last = '';
+  var VIDEO_RE = /\.(m3u8|mp4|mkv|mpd)(\?|#|&|\/|$)/i;
+  var SEG_RE = /\/(init|seg|segment|chunk|frag|fragment)[-_.]?[\w-]*\.mp4$/i;
+  var WARN_RE = /extension not enable|ad ?block(er)? detected|disable (your )?ad ?block|please disable (your )?ad|extension required|private dns|preventing required resources/i;
+  var seenMedia = {};
+
+  function bridge() {
+    try { return window.AndroidBridge; } catch (e) { return null; }
+  }
 
   function reportVideo(v) {
     var src = v.currentSrc || v.src;
-    if (!src || !VIDEO_RE.test(src)) return;
+    if (!src || !VIDEO_RE.test(src) || SEG_RE.test(src.split('?')[0])) return;
     var w = v.videoWidth || 0;
     var h = v.videoHeight || 0;
     if (h === 0) return; // metadata not loaded yet
     var sig = src + '|' + w + 'x' + h;
-    if (sig === last) return; // only report when the video or its quality changes
-    last = sig;
-    try { window.AndroidBridge.onVideoPlaying(src, w, h); } catch (e) {}
+    if (v.__nmSig === sig) return; // only report when the video or its quality changes
+    v.__nmSig = sig;
+    try { bridge().onVideoPlaying(src, w, h); } catch (e) {}
   }
 
   function scanVideos() {
@@ -546,26 +621,97 @@ private const val PAGE_SCRIPT = """
     });
   }
 
+  // ---- links without a file extension: recognised by the response's content type ----
+  function reportMedia(url) {
+    if (!url || url.indexOf('http') !== 0 || seenMedia[url]) return;
+    seenMedia[url] = 1;
+    try { bridge().onMediaUrl(url); } catch (e) {}
+  }
+  function looksLikeMedia(ct, len) {
+    ct = (ct || '').toLowerCase();
+    if (ct.indexOf('mpegurl') >= 0 || ct.indexOf('dash+xml') >= 0) return true;
+    return /^video\/(mp4|webm|x-matroska)/.test(ct) && len >= 1000000;
+  }
+  function totalLength(getHeader) {
+    var cr = getHeader('content-range');
+    if (cr && cr.indexOf('/') > 0) {
+      var t = parseInt(cr.split('/')[1], 10);
+      if (t > 0) return t;
+    }
+    return parseInt(getHeader('content-length') || '0', 10) || 0;
+  }
+
+  if (window.fetch && !window.__nmFetch) {
+    window.__nmFetch = true;
+    var origFetch = window.fetch;
+    window.fetch = function () {
+      var p = origFetch.apply(this, arguments);
+      try {
+        p.then(function (res) {
+          try {
+            var get = function (n) { return res.headers.get(n); };
+            if (res && looksLikeMedia(get('content-type'), totalLength(get))) reportMedia(res.url);
+          } catch (e) {}
+        }, function () {});
+      } catch (e) {}
+      return p;
+    };
+  }
+
+  if (window.XMLHttpRequest && !window.__nmXhr) {
+    window.__nmXhr = true;
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function () {
+      var xhr = this;
+      try {
+        xhr.addEventListener('readystatechange', function () {
+          if (xhr.readyState !== 2) return;
+          try {
+            var get = function (n) { return xhr.getResponseHeader(n); };
+            if (looksLikeMedia(get('content-type'), totalLength(get))) reportMedia(xhr.responseURL);
+          } catch (e) {}
+        });
+      } catch (e) {}
+      return origOpen.apply(this, arguments);
+    };
+  }
+
+  // ---- warnings: hide the small warning box only ----
   function hideWarnings() {
-    var keywords = ['extension not enable', 'extension not enabled', 'adblocker detected',
-      'ad blocker detected', 'disable your adblock', 'extension required', 'private dns', 'preventing required resources'];
-    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) {
-      el.remove();
-    });
-    document.querySelectorAll('div, span, p, h1, h2, h3, h4, button, a').forEach(function (el) {
-      var t = (el.innerText || '').toLowerCase();
-      if (t.length > 0 && keywords.some(function (k) { return t.indexOf(k) >= 0; })) {
-        if (!el.querySelector('video') && el.tagName !== 'VIDEO') {
-          el.style.display = 'none';
-        }
+    document.querySelectorAll('.adblock-container, .adblock-card').forEach(function (el) { el.remove(); });
+    var root = document.body;
+    if (!root) return;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    var hits = [];
+    while ((node = walker.nextNode())) {
+      var v = node.nodeValue;
+      if (v && v.length < 400 && WARN_RE.test(v)) hits.push(node);
+    }
+    hits.forEach(function (n) {
+      var el = n.parentElement;
+      if (!el || /^(SCRIPT|STYLE|TEXTAREA|NOSCRIPT|CODE|PRE|TITLE)$/.test(el.nodeName)) return;
+      var box = el;
+      var found = false;
+      for (var i = 0; i < 6 && box && box !== document.body && box !== document.documentElement; i++) {
+        var pos = window.getComputedStyle(box).position;
+        var cls = String(box.className && box.className.baseVal !== undefined ? box.className.baseVal : box.className || '') +
+          ' ' + (box.id || '') + ' ' + (box.getAttribute('role') || '');
+        if (pos === 'fixed' || pos === 'absolute' || pos === 'sticky' ||
+            /modal|dialog|popup|overlay|alert|toast|banner|adblock/i.test(cls)) { found = true; break; }
+        box = box.parentElement;
       }
+      if (!found) box = el; // no floating box around it: hide just the text element itself
+      if (!box || box === document.body || box === document.documentElement) return;
+      if (box.querySelector('video, iframe') || (box.textContent || '').length > 600) return;
+      box.style.setProperty('display', 'none', 'important');
     });
   }
 
   function unlockDownloadButtons() {
     document.querySelectorAll('button, a, div[role="button"]').forEach(function (btn) {
-      var t = (btn.innerText || '').toLowerCase();
-      if (t.indexOf('download') >= 0) {
+      var t = (btn.textContent || '').toLowerCase();
+      if (t.length < 60 && t.indexOf('download') >= 0) {
         btn.style.pointerEvents = 'auto';
         btn.style.opacity = '1';
         btn.disabled = false;
@@ -592,9 +738,15 @@ private const val PAGE_SCRIPT = """
   setTimeout(cleanup, 3000);
   setTimeout(cleanup, 6000);
   setInterval(scanVideos, 1000); // cheap: only looks at <video> elements
-  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+  (window.__nmObs || function () {})(schedule);
 })();
 """
+
+// Everything that must run as early as possible on EVERY frame (page + player iframes).
+// Each script is wrapped in its own try/catch so one failing script can never stop the others.
+private val START_SCRIPT: String = listOf(
+    OBSERVE_SCRIPT, ADBLOCK_SCRIPT, DETECT_SCRIPT, BRAND_SCRIPT, CLEAN_SCRIPT, LIMIT_SCRIPT, PAGE_SCRIPT
+).joinToString("\n") { script -> "try {\n" + script + "\n} catch (e) {}" }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -609,6 +761,11 @@ fun NetMirrorScreen(
     var isLoading by remember { mutableStateOf(true) }
     var canGoBack by remember { mutableStateOf(false) }
     var webView: WebView? by remember { mutableStateOf(null) }
+    // Always posts to the main thread, even if the WebView is detached or being recreated.
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    // Bumped when the WebView's render process dies, so a fresh WebView is built (no app crash).
+    var webViewKey by remember { mutableStateOf(0) }
+    var lastPageUrl by remember { mutableStateOf(NETMIRROR_HOME) }
 
     var capturedLinks by remember { mutableStateOf<List<CapturedLink>>(emptyList()) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
@@ -660,7 +817,8 @@ fun NetMirrorScreen(
     fun isAllowedNavigation(url: String): Boolean {
         if (!(url.startsWith("http://") || url.startsWith("https://"))) return false
         if (isAdUrl(url)) return false
-        if (allowedHostHints.any { url.contains(it, ignoreCase = true) }) return true
+        val host = hostOf(url)
+        if (host.isNotEmpty() && allowedHostHints.any { host.contains(it, ignoreCase = true) }) return true
         return isVideoUrl(url)
     }
 
@@ -757,8 +915,12 @@ fun NetMirrorScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            exitFullscreen()
-            webView?.destroy()
+            runCatching { exitFullscreen() }
+            webView?.let { wv ->
+                runCatching { wv.stopLoading() }
+                runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
+                runCatching { wv.destroy() }
+            }
             webView = null
         }
     }
@@ -923,26 +1085,36 @@ fun NetMirrorScreen(
         }
 
         // ================= WEBVIEW =================
+        key(webViewKey) {
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
                     webView = this
 
                     // Bridge so JavaScript can send links to Kotlin
+                    // Any frame (even an ad iframe) can call these, so every argument is treated as
+                    // untrusted: nullable + validated + wrapped, an exception here would kill the app.
                     addJavascriptInterface(object {
                         @JavascriptInterface
-                        fun onVideoPlaying(url: String, width: Int, height: Int) {
-                            post { onVideoPlayingFound(url, width, height) }
+                        fun onVideoPlaying(url: String?, width: Int, height: Int) {
+                            if (url.isNullOrBlank()) return
+                            mainHandler.post { runCatching { onVideoPlayingFound(url, width, height) } }
+                        }
+
+                        @JavascriptInterface
+                        fun onMediaUrl(url: String?) {
+                            if (url.isNullOrBlank()) return
+                            mainHandler.post { runCatching { addCapturedLink(url) } }
                         }
 
                         @JavascriptInterface
                         fun onWebPlayTick() {
-                            post { onPlayTick() }
+                            mainHandler.post { runCatching { onPlayTick() } }
                         }
 
                         @JavascriptInterface
                         fun onWebSeek() {
-                            post { onSeekEvent() }
+                            mainHandler.post { runCatching { onSeekEvent() } }
                         }
 
                         @JavascriptInterface
@@ -957,7 +1129,7 @@ fun NetMirrorScreen(
                         domStorageEnabled = true
                         databaseEnabled = true
                         mediaPlaybackRequiresUserGesture = false
-                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         userAgentString =
                             "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 " +
                                 "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -1024,6 +1196,7 @@ fun NetMirrorScreen(
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             isLoading = true
                             canGoBack = view?.canGoBack() == true
+                            if (url != null && url.startsWith("http")) lastPageUrl = url
                             // Fallback for WebViews without document-start scripts.
                             view?.evaluateJavascript(START_SCRIPT, null)
                         }
@@ -1039,12 +1212,36 @@ fun NetMirrorScreen(
                             request: WebResourceRequest?
                         ): Boolean {
                             val url = request?.url?.toString() ?: return true
-                            return !isAllowedNavigation(url)
+                            if (request?.isForMainFrame == true) return !isAllowedNavigation(url)
+                            // Player / captcha frames: only block ads and non-web schemes,
+                            // so a player hosted on a new domain is not cut off.
+                            return !(url.startsWith("http://") || url.startsWith("https://")) || isAdUrl(url)
                         }
 
                         @Deprecated("Deprecated in Java")
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             return url == null || !isAllowedNavigation(url)
+                        }
+
+                        // Without this, Android KILLS THE WHOLE APP whenever the WebView's renderer
+                        // runs out of memory or crashes (heavy pages / long video). Returning true
+                        // keeps the app alive; we throw the dead WebView away and build a new one.
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: RenderProcessGoneDetail?
+                        ): Boolean {
+                            mainHandler.post {
+                                runCatching { exitFullscreen() }
+                                view?.let { dead ->
+                                    runCatching { (dead.parent as? ViewGroup)?.removeView(dead) }
+                                    runCatching { dead.destroy() }
+                                }
+                                webView = null
+                                isLoading = true
+                                Toast.makeText(context, "Page crashed - reloading...", Toast.LENGTH_SHORT).show()
+                                webViewKey += 1
+                            }
+                            return true
                         }
 
                         override fun onSafeBrowsingHit(
@@ -1053,8 +1250,10 @@ fun NetMirrorScreen(
                             threatType: Int,
                             callback: SafeBrowsingResponse?
                         ) {
-                            // Protect the user by routing back to safety if threat is detected
-                            callback?.backToSafety(true)
+                            // Main page flagged: go back to safety. Flagged embedded frames/files
+                            // (players, CDNs) are let through so the video is not cut off.
+                            if (request?.isForMainFrame == true) callback?.backToSafety(true)
+                            else callback?.proceed(false)
                         }
 
                         override fun onReceivedSslError(
@@ -1067,30 +1266,31 @@ fun NetMirrorScreen(
                         }
 
                         // One interceptor, three steps in order:
-                        // 1) block ads  2) capture video links  3) add extension headers
+                        // 1) block ads  2) capture video links  3) add extension headers (video files only)
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
                         ): WebResourceResponse? {
                             if (request == null) return null
-                            val url = request.url.toString()
-
-                            // 1) Block ads & return clean stub so anti-adblock detection is neutralized
-                            if (isAdUrl(url)) {
-                                return createAdBlockResponse(url)
-                            }
-
-                            // 2) Capture video links seen on the network
-                            if (isVideoUrl(url)) {
-                                view?.post { addCapturedLink(url) }
-                            }
-
-                            // 3) Referer rules + custom headers (GET only)
-                            if (!request.method.equals("GET", ignoreCase = true)) return null
-                            if (!url.startsWith("http")) return null
-                            val extra = AppConfig.resolveVideoHeaders(url)
-                            if (extra.isEmpty()) return null
                             return try {
+                                val url = request.url.toString()
+
+                                // 1) Block ads & return a clean stub so anti-adblock detection is neutralized
+                                if (isAdUrl(url)) return createAdBlockResponse(url, request.requestHeaders)
+
+                                // 2) Capture video links seen on the network
+                                val isVideo = isVideoUrl(url)
+                                if (isVideo) mainHandler.post { runCatching { addCapturedLink(url) } }
+
+                                // 3) Referer rules + custom headers - ONLY for the video files/segments
+                                //    (never re-download the site's pages/scripts, that breaks the site).
+                                if (!request.method.equals("GET", ignoreCase = true)) return null
+                                if (!url.startsWith("http")) return null
+                                val isMedia = isVideo || isSegmentUrl(url) ||
+                                    AppConfig.REFERER_RULES.keys.any { url.contains(it) }
+                                if (!isMedia) return null
+                                val extra = AppConfig.resolveVideoHeaders(url)
+                                if (extra.isEmpty()) return null
                                 fetchWithHeaders(url, request.requestHeaders, extra)
                             } catch (e: Exception) {
                                 null // fall back to a normal WebView load
@@ -1098,13 +1298,14 @@ fun NetMirrorScreen(
                         }
                     }
 
-                    loadUrl(NETMIRROR_HOME)
+                    loadUrl(lastPageUrl)
                 }
             },
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f)
         )
+        }
     }
 
     limitReason?.let { reason ->
@@ -1272,7 +1473,13 @@ private fun fetchWithHeaders(
     }
 
     val code = conn.responseCode
-    val stream = if (code >= 400) conn.errorStream else conn.inputStream
+    if (code < 200 || code in 300..399) {
+        // WebResourceResponse rejects these; let WebView load the file itself instead.
+        conn.disconnect()
+        throw java.io.IOException("Unsupported status $code")
+    }
+    val stream = (if (code >= 400) conn.errorStream else conn.inputStream)
+        ?: ByteArrayInputStream(ByteArray(0))
     val contentType = conn.contentType ?: "application/octet-stream"
     val mime = contentType.substringBefore(';').trim()
     val encoding = if (contentType.contains("charset=", ignoreCase = true))
