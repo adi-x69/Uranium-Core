@@ -115,6 +115,7 @@ dependencies {
   implementation("com.google.firebase:firebase-database")
   implementation("androidx.media3:media3-exoplayer:1.3.1")
   implementation("androidx.media3:media3-ui:1.3.1")
+  implementation("androidx.media3:media3-exoplayer-hls:1.3.1")   // <-- NEW: HLS (.m3u8) playback
   implementation("androidx.webkit:webkit:1.11.0")
   implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
   implementation(libs.kotlinx.coroutines.android)
