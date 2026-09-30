@@ -397,11 +397,16 @@ private fun ReactorRoomHero(
     onPlayWeb: () -> Unit,
     onSearchMovies: () -> Unit,
 ) {
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(835f / 1883f)
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
     ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 520.dp)
+                .aspectRatio(835f / 1883f)
+        ) {
         val w = maxWidth
         val h = maxHeight
 
@@ -623,6 +628,7 @@ private fun ReactorRoomHero(
                 .size(w * 0.2635f, h * 0.0558f)
                 .clickable(onClick = onPlayWeb)
         )
+    }
     }
 }
 

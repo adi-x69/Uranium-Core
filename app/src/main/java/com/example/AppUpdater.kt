@@ -475,6 +475,7 @@ fun ForcedUpdateDialog(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .widthIn(max = 480.dp)
                     .wrapContentHeight(),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
@@ -485,6 +486,8 @@ fun ForcedUpdateDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 580.dp)
+                        .verticalScroll(rememberScrollState())
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {

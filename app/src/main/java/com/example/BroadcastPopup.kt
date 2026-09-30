@@ -129,11 +129,13 @@ fun BroadcastPopup(
             ) {
                 Column(
                     modifier = Modifier
-                        .widthIn(max = 360.dp)
+                        .widthIn(max = 380.dp)
                         .fillMaxWidth()
+                        .heightIn(max = 560.dp)
                         .clip(cardShape)
                         .background(AbyssSurfaceElevated)
                         .border(1.5.dp, accentColors.core.copy(alpha = 0.75f), cardShape)
+                        .verticalScroll(rememberScrollState())
                         .padding(horizontal = 24.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {

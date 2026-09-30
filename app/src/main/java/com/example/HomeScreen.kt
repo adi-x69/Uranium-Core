@@ -436,11 +436,16 @@ private fun ReactorHomeHero(
     onJoinRoom: () -> Unit,
     onNavigateToFriends: () -> Unit,
 ) {
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(835f / 1884f)
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
     ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 520.dp)
+                .aspectRatio(835f / 1884f)
+        ) {
         val w = maxWidth
         val h = maxHeight
         val busy = isCreating || isJoining
@@ -608,6 +613,7 @@ private fun ReactorHomeHero(
                 .size(w * 0.3198f, h * 0.0531f)
                 .bouncyClick(onClick = onNavigateToFriends)
         )
+    }
     }
 }
 

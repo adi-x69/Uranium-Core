@@ -268,6 +268,7 @@ fun YouTubeWatchScreen(
     var lastLoadedYtId by remember { mutableStateOf<String?>(null) }
     var currentQualityLabel by remember { mutableStateOf<String?>("Auto") }
     var internalWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    var playerViewRef by remember { mutableStateOf<YouTubePlayerView?>(null) }
     var isSettingsOpen by remember { mutableStateOf(false) }
 
     var selectedQuality by remember { mutableStateOf(YT_QUALITY_AUTO) }
@@ -280,7 +281,8 @@ fun YouTubeWatchScreen(
         selectedQuality = code
         qualityAppliedForVideo = currentYtId
         qualityScope.launch {
-            val ok = ytApplyQuality(internalWebView, code, previous, currentYtId)
+            val wv = internalWebView ?: findWebViewInHierarchy(playerViewRef)
+            val ok = ytApplyQuality(wv, code, previous, currentYtId)
             val name = if (code == YT_QUALITY_AUTO) "Auto" else YtQuality.label(code)
             if (ok) {
                 android.widget.Toast.makeText(context, "Quality: $name", android.widget.Toast.LENGTH_SHORT).show()
@@ -1013,6 +1015,7 @@ fun YouTubeWatchScreen(
                         AndroidView(
                             factory = { ctx ->
                                 YouTubePlayerView(ctx).apply {
+                                    playerViewRef = this
                                     enableAutomaticInitialization = false
                                     lifecycleOwner.lifecycle.addObserver(this)
 
@@ -1023,7 +1026,7 @@ fun YouTubeWatchScreen(
                                             view.settings.javaScriptEnabled = true
                                             view.settings.domStorageEnabled = true
                                             view.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-                                            view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                            view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
                                             view.isLongClickable = false
                                             view.setOnLongClickListener { true }
 
@@ -1296,7 +1299,8 @@ fun YouTubeWatchScreen(
                                                     isYtBuffering = false
                                                     if (selectedQuality != YT_QUALITY_AUTO && qualityAppliedForVideo != currentYtId) {
                                                         qualityAppliedForVideo = currentYtId
-                                                        qualityScope.launch { ytReapplyQuality(internalWebView, selectedQuality) }
+                                                        val wv = internalWebView ?: findWebViewInHierarchy(playerViewRef)
+                                                        qualityScope.launch { ytReapplyQuality(wv, selectedQuality) }
                                                     }
                                                 }
                                                 PlayerConstants.PlayerState.PAUSED -> {
@@ -1655,10 +1659,11 @@ fun YouTubeWatchScreen(
     }
 
     if (isSettingsOpen) {
+        val activeWv = internalWebView ?: findWebViewInHierarchy(playerViewRef)
         YtQualityDialog(
             selected = selectedQuality,
             actualLabel = currentQualityLabel,
-            webView = internalWebView,
+            webView = activeWv,
             onSelect = { code -> applyYouTubeQuality(code) },
             onDismiss = { isSettingsOpen = false }
         )

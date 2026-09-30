@@ -410,7 +410,9 @@ fun LoginScreen(
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .widthIn(max = 480.dp)
                         .aspectRatio(834f / 1885f)
+                        .align(Alignment.CenterHorizontally)
                 ) {
                     val w = maxWidth
                     val h = maxHeight
@@ -967,7 +969,9 @@ fun SignupScreen(
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .widthIn(max = 480.dp)
                         .aspectRatio(853f / 1843f)
+                        .align(Alignment.CenterHorizontally)
                 ) {
                     val w = maxWidth
                     val h = maxHeight
