@@ -1,5 +1,7 @@
 package com.example
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -19,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
@@ -35,6 +38,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -746,7 +751,81 @@ fun ProfileScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Instagram Profile Redirect Card
+                FuturisticGlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("instagram_profile_button")
+                        .bouncyClick {
+                            val username = "uraniumm_235"
+                            val appUri = Uri.parse("http://instagram.com/_u/$username")
+                            val appIntent = Intent(Intent.ACTION_VIEW, appUri).apply {
+                                setPackage("com.instagram.android")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            try {
+                                context.startActivity(appIntent)
+                            } catch (_: Exception) {
+                                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/$username/")).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                try {
+                                    context.startActivity(webIntent)
+                                } catch (_: Exception) {
+                                    Toast.makeText(context, "Could not open Instagram", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    cornerRadius = 20.dp,
+                    borderWidth = 1.5.dp,
+                    borderColors = listOf(
+                        Color(0xFFE1306C).copy(alpha = 0.85f),
+                        Color(0xFFFD1D1D).copy(alpha = 0.70f),
+                        Color(0xFFF77737).copy(alpha = 0.65f),
+                        Color(0xFF833AB4).copy(alpha = 0.80f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        InstagramLogo(size = 46.dp)
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.follow_me_on_insta),
+                                color = Color(0xFFB0BAC8),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.insta_handle),
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = DisplayFontFamily
+                            )
+                        }
+
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = stringResource(R.string.insta_content_description),
+                            tint = Color(0xFFC5D1E0),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
 
                 // Logout Button
                 FuturisticHazardButton(
@@ -758,6 +837,66 @@ fun ProfileScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
             }
+        }
+    }
+}
+
+/**
+ * Vector-drawn official geometry of the Instagram icon with vibrant brand gradient.
+ */
+@Composable
+fun InstagramLogo(
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 46.dp
+) {
+    val instaGradient = Brush.linearGradient(
+        colors = listOf(
+            Color(0xFF833AB4), // Purple
+            Color(0xFFC13584), // Magenta / Red-Violet
+            Color(0xFFE1306C), // Pink / Crimson
+            Color(0xFFFD1D1D), // Coral red
+            Color(0xFFF77737), // Warm orange
+            Color(0xFFFCAF45)  // Yellow-orange
+        )
+    )
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(RoundedCornerShape(12.dp))
+            .background(instaGradient),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.size(size * 0.62f)) {
+            val strokeWidth = 2.4.dp.toPx()
+            val canvasW = this.size.width
+            val canvasH = this.size.height
+
+            // Outer rounded rectangle
+            drawRoundRect(
+                color = Color.White,
+                size = this.size,
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(canvasW * 0.28f),
+                style = Stroke(width = strokeWidth)
+            )
+
+            // Central camera lens circle
+            drawCircle(
+                color = Color.White,
+                radius = canvasW * 0.26f,
+                center = center,
+                style = Stroke(width = strokeWidth)
+            )
+
+            // Flash / dot on top right
+            drawCircle(
+                color = Color.White,
+                radius = strokeWidth * 0.70f,
+                center = androidx.compose.ui.geometry.Offset(
+                    x = canvasW * 0.76f,
+                    y = canvasH * 0.24f
+                )
+            )
         }
     }
 }
